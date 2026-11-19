@@ -20,9 +20,10 @@ build/
 .mypy_cache/
 
 # --- Runtime Media & Pipeline Outputs ---
-.buffer/
-clips/
-shorts/
+/.buffer/
+/clips/
+/shorts/
+!/app/shorts/
 highlights.jsonl
 scratch/
 

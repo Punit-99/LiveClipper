@@ -42,6 +42,7 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [toast, setToast] = useState(null);
+  const [clipProcessingStatus, setClipProcessingStatus] = useState(null);
 
   const wsRef = useRef(null);
 
@@ -98,9 +99,44 @@ export default function App() {
           } else if (payload.type === 'clip_extracted') {
             fetchClips().then(setClips).catch(() => {});
             showToast(`New clip extracted: ${payload.data?.title || payload.data?.filename}`, 'success');
-          } else if (payload.type === 'short_processing_complete' || payload.type === 'shorts_processing_complete') {
+          } else if (payload.type === 'processing_started' || payload.type === 'short_processing_started') {
+            setClipProcessingStatus({
+              active: true,
+              clip_id: payload.data?.clip_id,
+              title: payload.data?.title || `Clip ${payload.data?.clip_id}`,
+              stage: 'trimming',
+              percentage: 15,
+              status: 'processing',
+              error: null,
+            });
+          } else if (payload.type === 'processing_progress') {
+            setClipProcessingStatus(prev => ({
+              ...(prev || {}),
+              active: true,
+              clip_id: payload.data?.clip_id || prev?.clip_id,
+              stage: payload.data?.stage || prev?.stage || 'processing',
+              percentage: payload.data?.percentage ?? prev?.percentage ?? 50,
+              status: 'processing',
+              error: null,
+            }));
+          } else if (payload.type === 'processing_complete' || payload.type === 'short_processing_complete' || payload.type === 'shorts_processing_complete') {
+            setClipProcessingStatus(prev => ({
+              ...(prev || {}),
+              percentage: 100,
+              status: 'completed',
+              error: null,
+            }));
             fetchShorts().then(setShorts).catch(() => {});
+            setTimeout(() => {
+              setClipProcessingStatus(null);
+            }, 3000);
             showToast('Short video processing complete!', 'success');
+          } else if (payload.type === 'processing_failed') {
+            setClipProcessingStatus(prev => ({
+              ...(prev || {}),
+              status: 'failed',
+              error: payload.data?.error || 'Processing failed',
+            }));
           } else if (payload.type === 'upload_complete') {
             fetchShorts().then(setShorts).catch(() => {});
             fetchQuota().then(setQuota).catch(() => {});
@@ -170,11 +206,26 @@ export default function App() {
   };
 
   const handleProcessSingle = async (clipId) => {
+    const targetClip = clips.find(c => c.id === clipId);
+    setClipProcessingStatus({
+      active: true,
+      clip_id: clipId,
+      title: targetClip ? targetClip.title : `Clip ${clipId}`,
+      stage: 'trimming',
+      percentage: 15,
+      status: 'processing',
+      error: null,
+    });
     try {
       await processSingleShort(clipId);
       showToast(`Clip ${clipId} reframed into 9:16 Short!`, 'success');
       await Promise.all([fetchShorts().then(setShorts), fetchClips().then(setClips)]);
     } catch (err) {
+      setClipProcessingStatus(prev => ({
+        ...(prev || { active: true, clip_id: clipId, title: `Clip ${clipId}` }),
+        status: 'failed',
+        error: err.message || 'Processing failed',
+      }));
       showToast(`Processing failed: ${err.message}`, 'error');
     }
   };
@@ -305,6 +356,8 @@ export default function App() {
             onDeleteClip={handleDeleteClip}
             onDeleteAllClips={handleDeleteAllClips}
             showToast={showToast}
+            processingStatus={clipProcessingStatus}
+            onDismissProcessingStatus={() => setClipProcessingStatus(null)}
           />
         )}
 

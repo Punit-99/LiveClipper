@@ -96,7 +96,20 @@ def _save_tokens(data: dict) -> None:
             json.dump(data, fh)
             fh.flush()
             os.fsync(fh.fileno())
-        os.replace(tmp_path, _TOKENS_PATH)
+        try:
+            os.replace(tmp_path, _TOKENS_PATH)
+        except OSError as err:
+            if err.errno in (16, 18):  # EBUSY or EXDEV (Docker bind mount)
+                with open(_TOKENS_PATH, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            else:
+                raise
     except BaseException:
         try:
             tmp_path.unlink(missing_ok=True)

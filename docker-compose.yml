@@ -10,21 +10,22 @@ services:
     env_file:
       - ./backend/.env
     volumes:
+      # Source code (dev hot-reload)
       - ./backend/app:/app/app
-      - ./backend/tests:/app/tests
       - ./backend/run.py:/app/run.py
+      # Persistent data
+      - ./backend/.env:/app/.env
       - ./backend/clips:/app/clips
       - ./backend/shorts:/app/shorts
       - ./backend/.buffer:/app/.buffer
       - ./backend/highlights.jsonl:/app/highlights.jsonl
       - ./backend/.youtube_tokens.json:/app/.youtube_tokens.json
-      - ./backend/.env:/app/.env
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/health"]
-      interval: 10s
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 20s
 
   frontend:
     build:

@@ -125,7 +125,7 @@ class MonitoringSupervisor:
 
             # YouTube discovery / priority channels if requested
             if target_platform in ("youtube", "all"):
-                yt_candidates = list(self.settings.target_youtube_channels)
+                yt_candidates = channels if (channels and target_platform == "youtube") else list(self.settings.target_youtube_channels)
                 token_mgr = None
                 if self.settings.youtube_tokens_path and self.settings.youtube_tokens_path.is_file():
                     token_mgr = YouTubeTokenManager(
@@ -152,6 +152,16 @@ class MonitoringSupervisor:
                         custom_sessions.append(sess)
                 except Exception as exc:
                     log.warning("YouTube stream check failed during API start: %s", exc)
+
+                if not custom_sessions and yt_candidates:
+                    log.info("No active streams returned via search; attaching configured YouTube channels directly: %s", yt_candidates)
+                    for cid in yt_candidates:
+                        sess = StreamSession(
+                            channel=cid,
+                            settings=self.settings,
+                            platform="youtube",
+                        )
+                        custom_sessions.append(sess)
 
             twitch_channels = [resolve_channel_name(c) for c in effective_channels] if target_platform in ("twitch", "all") else []
 

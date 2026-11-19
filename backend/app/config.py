@@ -124,6 +124,8 @@ class Settings:
         "UCXfJ48U5G1T5k-p8G9f5J9A",  # Jonathan Gaming
         "UClvgJrkf4k4Kq2R4H8_wB9g",  # Mythpat
     )
+    excluded_youtube_channels: tuple[str, ...] = ()
+    excluded_target_channels: tuple[str, ...] = ()
     language_filter_enabled: bool = True
     target_languages: tuple[str, ...] = ("en", "hi")
     shorts_output_bitrate: str = "6M"
@@ -304,6 +306,8 @@ def load_settings() -> Settings:
         viral_title_language=os.getenv("VIRAL_TITLE_LANGUAGE", "en").strip().lower() or "en",
         monitor_platform=monitor_platform,
         target_youtube_channels=yt_channels,
+        excluded_youtube_channels=_tuple_env("EXCLUDED_YOUTUBE_CHANNELS"),
+        excluded_target_channels=_tuple_env("EXCLUDED_TARGET_CHANNELS"),
         language_filter_enabled=_bool_env("LANGUAGE_FILTER_ENABLED", True),
         target_languages=target_languages,
         shorts_output_bitrate=os.getenv("SHORTS_OUTPUT_BITRATE", "6M").strip() or "6M",

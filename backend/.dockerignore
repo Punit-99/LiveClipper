@@ -1,17 +1,50 @@
+# Virtual environments
 .buffer/
 clips/
 shorts/
 venv/
 .venv/
+
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
+dist/
+build/
+
+# Env / secrets
 .env
 .env.*
-node_modules/
-.DS_Store
-highlights.jsonl
 .youtube_tokens.json
+
+# Data files
+highlights.jsonl
+logs/
+data/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Git
 .git/
 .gitignore
+
+# Docker (don't send Dockerfile into the build context)
+Dockerfile
+docker-compose*.yml
+.dockerignore
+
+# Node (if any)
+node_modules/
+
+# Tests (not needed in production image)
+tests/
+*.test.py
+pytest.ini

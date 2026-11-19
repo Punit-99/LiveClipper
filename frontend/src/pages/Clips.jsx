@@ -17,6 +17,17 @@ import {
 import { formatDuration, deleteSingleClip, deleteAllClips } from '../api';
 import { formatChannelName } from '../utils/channels';
 
+const STAGE_LABELS = {
+  trimming: 'Trimming Duration (adapt_clip_duration)',
+  reframing: 'Reframing 9:16 Vertical Video (auto/wide)',
+  transcribing: 'Transcribing Audio (faster-whisper)',
+  subtitles: 'Generating Animated Subtitles (ASS/SRT)',
+  hooks: 'Overlaying Hook Title Banner',
+  encoding: 'Encoding Final 1080x1920 Short',
+};
+
+const ORDERED_STAGES = ['trimming', 'reframing', 'transcribing', 'subtitles', 'hooks', 'encoding'];
+
 export default function Clips({ 
   clips = [], 
   onProcessSingle, 
@@ -25,7 +36,9 @@ export default function Clips({
   onRefresh,
   onDeleteClip,
   onDeleteAllClips,
-  showToast
+  showToast,
+  processingStatus,
+  onDismissProcessingStatus,
 }) {
   const [selectedClip, setSelectedClip] = useState(null);
   const [channelFilter, setChannelFilter] = useState('');
@@ -102,6 +115,109 @@ export default function Clips({
 
   return (
     <div className="space-y-6">
+      {/* Clip Processing Progress Banner */}
+      {processingStatus && (
+        <div className={`p-4 rounded-2xl border transition-all duration-300 shadow-lg ${
+          processingStatus.status === 'completed'
+            ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300 shadow-emerald-500/5'
+            : processingStatus.status === 'failed'
+            ? 'bg-red-950/40 border-red-500/50 text-red-300 shadow-red-500/5'
+            : 'bg-[#121722] border-[#24334f] text-slate-200'
+        }`}>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center space-x-3">
+              {processingStatus.status === 'completed' ? (
+                <div className="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center shrink-0">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                </div>
+              ) : processingStatus.status === 'failed' ? (
+                <div className="w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-red-400" />
+                </div>
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center shrink-0">
+                  <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
+                </div>
+              )}
+              <div>
+                <div className="flex items-center space-x-2">
+                  <span className="font-bold text-white text-sm">
+                    {processingStatus.status === 'completed'
+                      ? 'Short ready! ✓'
+                      : processingStatus.status === 'failed'
+                      ? 'Processing Failed'
+                      : `Processing: ${processingStatus.title || processingStatus.clip_id}`}
+                  </span>
+                </div>
+                {processingStatus.status === 'processing' && (
+                  <div className="text-xs text-slate-400 mt-0.5">
+                    Stage: <span className="text-cyan-400 font-semibold">{STAGE_LABELS[processingStatus.stage] || processingStatus.stage}</span>
+                  </div>
+                )}
+                {processingStatus.status === 'failed' && (
+                  <p className="text-xs text-red-400 mt-0.5">{processingStatus.error}</p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-3">
+              <span className="text-sm font-mono font-bold text-slate-200">
+                {processingStatus.percentage}%
+              </span>
+              {processingStatus.status === 'failed' && onDismissProcessingStatus && (
+                <button
+                  onClick={onDismissProcessingStatus}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-[#182030]"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Progress Bar Track & Bar */}
+          <div className="w-full h-2.5 bg-[#0a0d14] rounded-full overflow-hidden mb-3 border border-[#1f293d]">
+            <div
+              className={`h-full transition-all duration-500 rounded-full ${
+                processingStatus.status === 'completed'
+                  ? 'bg-emerald-500'
+                  : processingStatus.status === 'failed'
+                  ? 'bg-red-500'
+                  : 'bg-gradient-to-r from-blue-500 via-indigo-500 to-cyan-400'
+              }`}
+              style={{ width: `${Math.min(100, Math.max(5, processingStatus.percentage || 0))}%` }}
+            />
+          </div>
+
+          {/* Stage Progression Breadcrumb */}
+          {processingStatus.status === 'processing' && (
+            <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-[#1f293d]/50 gap-1">
+              {ORDERED_STAGES.map((st, idx) => {
+                const currentIdx = ORDERED_STAGES.indexOf(processingStatus.stage);
+                const isPassed = currentIdx > idx;
+                const isCurrent = currentIdx === idx;
+                return (
+                  <div key={st} className="flex items-center space-x-1">
+                    <span className={`capitalize font-mono ${
+                      isCurrent
+                        ? 'text-cyan-400 font-bold underline'
+                        : isPassed
+                        ? 'text-emerald-400 font-medium'
+                        : 'text-slate-600'
+                    }`}>
+                      {isPassed ? '✓ ' : ''}{st}
+                    </span>
+                    {idx < ORDERED_STAGES.length - 1 && (
+                      <span className="text-slate-700 ml-1">→</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Header & Batch Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#121722] border border-[#1f293d] rounded-2xl p-6">
         <div>

@@ -82,7 +82,9 @@ def get_settings() -> dict[str, Any]:
     return {
         "platform": env_raw.get("MONITOR_PLATFORM") or cfg.monitor_platform,
         "target_channels": env_raw.get("TARGET_CHANNELS") or ",".join(cfg.target_channels),
+        "excluded_target_channels": env_raw.get("EXCLUDED_TARGET_CHANNELS") or ",".join(cfg.excluded_target_channels),
         "target_youtube_channels": env_raw.get("TARGET_YOUTUBE_CHANNELS") or ",".join(cfg.target_youtube_channels),
+        "excluded_youtube_channels": env_raw.get("EXCLUDED_YOUTUBE_CHANNELS") or ",".join(cfg.excluded_youtube_channels),
         "target_languages": env_raw.get("TARGET_LANGUAGES") or ",".join(cfg.target_languages),
         "multi_stream_enabled": env_raw.get("MULTI_STREAM_ENABLED", "false").lower() == "true",
         "max_streams": int(env_raw.get("MAX_STREAMS") or cfg.max_streams),
@@ -112,7 +114,9 @@ def update_settings(payload: dict[str, Any]) -> dict[str, Any]:
     env_map = {
         "platform": "MONITOR_PLATFORM",
         "target_channels": "TARGET_CHANNELS",
+        "excluded_target_channels": "EXCLUDED_TARGET_CHANNELS",
         "target_youtube_channels": "TARGET_YOUTUBE_CHANNELS",
+        "excluded_youtube_channels": "EXCLUDED_YOUTUBE_CHANNELS",
         "target_languages": "TARGET_LANGUAGES",
         "multi_stream_enabled": "MULTI_STREAM_ENABLED",
         "max_streams": "MAX_STREAMS",

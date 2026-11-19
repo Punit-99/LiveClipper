@@ -132,6 +132,22 @@ export async function updateSettings(payload) {
   return res.json();
 }
 
+export async function resolveChannel(channelId) {
+  if (!channelId || !channelId.trim()) {
+    return { id: channelId, name: channelId, resolved: false };
+  }
+  try {
+    const query = new URLSearchParams({ id: channelId.trim() });
+    const res = await fetch(`${API_BASE}/channels/resolve?${query.toString()}`);
+    if (!res.ok) {
+      return { id: channelId, name: channelId, resolved: false };
+    }
+    return res.json();
+  } catch (err) {
+    return { id: channelId, name: channelId, resolved: false };
+  }
+}
+
 export async function fetchHighlights(limit = 50, minScore = null) {
   const query = new URLSearchParams({ limit: limit.toString() });
   if (minScore !== null) query.set('min_score', minScore.toString());

@@ -3,3 +3,12 @@ dist/
 .DS_Store
 .git/
 .gitignore
+Dockerfile
+docker-compose*.yml
+.dockerignore
+.env
+.env.*
+*.log
+.vscode/
+.idea/
+coverage/

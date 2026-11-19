@@ -1,22 +1,43 @@
-# LiveClipper Backend Dockerfile
-# Single container running the LiveClipper backend API and video processing pipeline.
-# Base: python:3.11-slim for compatibility with torch, faster-whisper, and mediapipe.
+# LiveClipper Backend Dockerfile (Optimized)
+# Multi-stage build: ~5GB → ~1.5-2GB estimated
 
+# ============================================
+# Stage 1: BUILD — compile Python C-extensions
+# ============================================
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# Only build-essential needed here (never ships to final image)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip
+
+# Install CPU-only PyTorch first (prevents 2GB+ CUDA wheel download)
+RUN pip install --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch torchvision
+
+# Install remaining dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+
+# ============================================
+# Stage 2: RUNTIME — lean production image
+# ============================================
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Ensure Python unbuffered logging, bytecode suppression, and module import path
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     FFMPEG_THREADS=2
 
-# Install system dependencies:
-# - ffmpeg (built with libass support for animated karaoke subtitles)
-# - fontconfig and fonts for subtitle rendering and text overlays
-# - libgl1 and libglib2.0-0 for OpenCV / MediaPipe
-# - build-essential and curl for package builds and health checks
+# Runtime-only system deps (no build-essential, no curl)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     fontconfig \
@@ -25,36 +46,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-color-emoji \
     libgl1 \
     libglib2.0-0 \
-    build-essential \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip and install CPU version of PyTorch first to prevent downloading large CUDA wheels
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch torchvision
+# Copy all installed Python packages from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Copy requirements and install all Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy backend application source code
+# Copy application source
 COPY . .
 
-# Register bundled fonts with fontconfig so libass resolves Impact/Anton and custom fonts
-RUN mkdir -p /usr/local/share/fonts/liveclipper && \
+# Register fonts + create data dirs in a single layer
+RUN mkdir -p /usr/local/share/fonts/liveclipper /app/clips /app/shorts /app/logs /app/data /app/.buffer && \
     cp /app/app/video/fonts/*.ttf /usr/local/share/fonts/liveclipper/ 2>/dev/null || true && \
     cp /app/app/video/fonts/openshorts-fontmap.conf /etc/fonts/conf.d/60-liveclipper.conf 2>/dev/null || true && \
     fc-cache -f
 
-# Create data directories with appropriate permissions
-RUN mkdir -p /app/clips /app/shorts /app/logs /app/data /app/.buffer
-
-# Expose FastAPI server port
 EXPOSE 8000
 
-# Health check probe against API health endpoint
+# Healthcheck using Python (no curl needed = smaller image)
 HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=3 \
-  CMD curl -sf http://localhost:8000/api/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
 
-# Default command starts the FastAPI server
 CMD ["python", "server.py", "--host", "0.0.0.0", "--port", "8000"]

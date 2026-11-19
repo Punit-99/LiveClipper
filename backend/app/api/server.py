@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.events import ws_manager
-from app.api.routes import clips, monitor, settings, shorts, status as status_route, upload, websocket
+from app.api.routes import channels, clips, monitor, settings, shorts, status as status_route, upload, websocket
 from app.api.state import supervisor
 
 FRONTEND_DIST_DIR = Path(__file__).resolve().parent.parent.parent.parent / "frontend" / "dist"
@@ -57,6 +57,7 @@ def create_app() -> FastAPI:
     # Mount API routers
     app.include_router(status_route.router, prefix="/api")
     app.include_router(monitor.router, prefix="/api")
+    app.include_router(channels.router, prefix="/api")
     app.include_router(clips.router, prefix="/api")
     app.include_router(shorts.router, prefix="/api")
     app.include_router(upload.router, prefix="/api")

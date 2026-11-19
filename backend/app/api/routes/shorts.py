@@ -179,10 +179,18 @@ def process_pending_shorts(req: ProcessShortsRequest | None = None) -> dict[str,
 
     ws_manager.broadcast_sync("shorts_processing_started", {"channel": payload.channel})
 
+    def on_batch_progress(cid: str, stage: str, pct: int) -> None:
+        ws_manager.broadcast_sync("processing_progress", {
+            "clip_id": cid,
+            "stage": stage,
+            "percentage": pct,
+        })
+
     try:
         summary = pipeline.process_pending_shorts(
             channel=payload.channel,
             force=payload.force,
+            progress_callback=on_batch_progress,
         )
         ws_manager.broadcast_sync("shorts_processing_complete", summary)
         return summary
@@ -207,16 +215,50 @@ def process_single_short(clip_id: str, req: ProcessShortsRequest | None = None) 
     if payload.subtitle_style:
         pipeline.bridge.subtitle_style = payload.subtitle_style
 
-    ws_manager.broadcast_sync("short_processing_started", {"clip_id": clip_id})
+    # Resolve clip title for progress display
+    record = pipeline.manifest.get(clip_id)
+    clip_title = record.get("title") if record else None
+    if not clip_title:
+        for p in settings.clips_output_dir.rglob(f"*{clip_id}*.json"):
+            if p.is_file():
+                try:
+                    with open(p, "r", encoding="utf-8") as fh:
+                        data = json.load(fh)
+                        clip_title = data.get("analysis", {}).get("title") or data.get("title")
+                except Exception:
+                    pass
+                if clip_title:
+                    break
+    if not clip_title:
+        clip_title = f"Clip {clip_id}"
+
+    ws_manager.broadcast_sync("processing_started", {"clip_id": clip_id, "title": clip_title})
+    ws_manager.broadcast_sync("short_processing_started", {"clip_id": clip_id, "title": clip_title})
+
+    def on_single_progress(cid: str, stage: str, pct: int) -> None:
+        ws_manager.broadcast_sync("processing_progress", {
+            "clip_id": cid,
+            "stage": stage,
+            "percentage": pct,
+        })
 
     try:
         summary = pipeline.process_pending_shorts(
             clip_id_or_file=clip_id,
             force=True,  # Force re-render for single clip
+            progress_callback=on_single_progress,
         )
-        ws_manager.broadcast_sync("short_processing_complete", {"clip_id": clip_id, "summary": summary})
+        if summary.get("processed", 0) > 0:
+            ws_manager.broadcast_sync("processing_complete", {"clip_id": clip_id})
+            ws_manager.broadcast_sync("short_processing_complete", {"clip_id": clip_id, "summary": summary})
+        else:
+            err_msg = "Processing completed but no Short was produced."
+            if summary.get("items"):
+                err_msg = summary["items"][0].get("error", err_msg)
+            ws_manager.broadcast_sync("processing_failed", {"clip_id": clip_id, "error": err_msg})
         return summary
     except Exception as exc:
+        ws_manager.broadcast_sync("processing_failed", {"clip_id": clip_id, "error": str(exc)})
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process clip '{clip_id}' into short: {exc}",

@@ -90,6 +90,60 @@ def resolve_channel_name(channel_or_id: str | None, default: str = "unknown") ->
     return clean
 
 
+def resolve_channel_api(
+    channel_id: str,
+    token_manager: YouTubeTokenManager | None = None,
+    api_key: str | None = None,
+) -> tuple[str, bool]:
+    """Resolve a YouTube channel ID to its display name.
+
+    Returns (display_name, is_resolved).
+    Checks known static dict first, then in-memory dynamic cache,
+    and finally queries YouTube Data API v3 channels endpoint if credentials exist.
+    """
+    clean_id = (channel_id or "").strip()
+    if not clean_id:
+        return ("", False)
+
+    # 1. Check known channels
+    for cid, name in KNOWN_CHANNEL_NAMES.items():
+        if clean_id.lower() == cid.lower():
+            return (name, True)
+
+    # 2. Check dynamic cache
+    if clean_id in _DYNAMIC_CHANNEL_CACHE:
+        return (_DYNAMIC_CHANNEL_CACHE[clean_id], True)
+    if clean_id.lower() in _DYNAMIC_CHANNEL_CACHE:
+        return (_DYNAMIC_CHANNEL_CACHE[clean_id.lower()], True)
+
+    # 3. Query YouTube Data API if possible
+    try:
+        tm = token_manager
+        if tm is None:
+            try:
+                tm = YouTubeTokenManager()
+            except Exception:
+                tm = None
+
+        finder = YouTubeStreamFinder(token_manager=tm, api_key=api_key)
+        params = {"part": "snippet", "id": clean_id}
+        headers, query_params = finder._get_headers_or_params(params)
+        url = f"{YOUTUBE_API_BASE}/channels"
+        resp = finder.session.get(url, headers=headers, params=query_params, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            items = data.get("items", [])
+            if items:
+                title = items[0].get("snippet", {}).get("title")
+                if title:
+                    register_channel_name(clean_id, title)
+                    return (title, True)
+    except Exception as exc:
+        log.debug("Failed to resolve channel ID %s via API: %s", clean_id, exc)
+
+    return (clean_id, False)
+
+
 @dataclass(frozen=True)
 class YouTubeLiveStream:
     """Discovered YouTube live stream metadata."""

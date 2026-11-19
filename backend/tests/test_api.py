@@ -268,3 +268,102 @@ class TestDashboardAPI(TestCase):
                 self.assertTrue(resp.json()["deleted"])
                 self.assertEqual(resp.json()["count"], 2)
                 self.assertEqual(len(manifest.all_records()), 0)
+
+    def test_channel_resolution_endpoint(self) -> None:
+        """GET /api/channels/resolve?id=... resolves known channel IDs and handles unknowns."""
+        # 1. Known ID
+        resp = self.client.get("/api/channels/resolve?id=UCWsDFcIhY2DBi3GB5uykGXA")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["id"], "UCWsDFcIhY2DBi3GB5uykGXA")
+        self.assertEqual(data["name"], "IShowSpeed")
+        self.assertTrue(data["resolved"])
+
+        # 2. Unknown ID with no credentials / failure returns resolved=False
+        with patch("app.discovery.youtube_finder.requests.Session.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 404
+            mock_get.return_value = mock_resp
+
+            resp_un = self.client.get("/api/channels/resolve?id=UCUnknownTestID123")
+            self.assertEqual(resp_un.status_code, 200)
+            data_un = resp_un.json()
+            self.assertEqual(data_un["id"], "UCUnknownTestID123")
+            self.assertFalse(data_un["resolved"])
+
+        # 3. Dynamic resolution via API mock
+        with patch("app.discovery.youtube_finder.YouTubeStreamFinder._get_headers_or_params", return_value=({}, {})):
+            with patch("app.discovery.youtube_finder.requests.Session.get") as mock_get:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = {
+                    "items": [{"snippet": {"title": "Mocked Channel Official"}}]
+                }
+                mock_get.return_value = mock_resp
+
+                resp_mock = self.client.get("/api/channels/resolve?id=UCMockedChannel999")
+                self.assertEqual(resp_mock.status_code, 200)
+                data_mock = resp_mock.json()
+                self.assertEqual(data_mock["id"], "UCMockedChannel999")
+                self.assertEqual(data_mock["name"], "Mocked Channel Official")
+                self.assertTrue(data_mock["resolved"])
+
+    def test_settings_excluded_channels(self) -> None:
+        """POST /api/settings persists excluded_youtube_channels and excluded_target_channels."""
+        payload = {
+            "target_youtube_channels": "UCWsDFcIhY2DBi3GB5uykGXA",
+            "excluded_youtube_channels": "UC0IWRLai-BAwci_e9MylNGw,UC7cs8q-gJRlGwj4A8OmCmXg",
+            "target_channels": "kaicenat,xqc",
+            "excluded_target_channels": "shroud,tarik",
+            "target_languages": "en,hi,es",
+        }
+        resp = self.client.post("/api/settings", json=payload)
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["target_youtube_channels"], "UCWsDFcIhY2DBi3GB5uykGXA")
+        self.assertEqual(data["excluded_youtube_channels"], "UC0IWRLai-BAwci_e9MylNGw,UC7cs8q-gJRlGwj4A8OmCmXg")
+        self.assertEqual(data["target_channels"], "kaicenat,xqc")
+        self.assertEqual(data["excluded_target_channels"], "shroud,tarik")
+        self.assertEqual(data["target_languages"], "en,hi,es")
+
+    def test_websocket_processing_events(self) -> None:
+        """Processing a single clip broadcasts processing_started, progress, and complete events."""
+        from app.api.events import ws_manager
+
+        broadcast_events: list[tuple[str, dict]] = []
+
+        def fake_broadcast(event_type: str, data: dict = None):
+            broadcast_events.append((event_type, data or {}))
+
+        with patch.object(ws_manager, "broadcast_sync", side_effect=fake_broadcast):
+            mock_pipeline = MagicMock()
+            mock_pipeline.manifest.get.return_value = {"title": "Awesome Highlight"}
+
+            def fake_process_pending_shorts(*args, **kwargs):
+                cb = kwargs.get("progress_callback")
+                if cb:
+                    cb("test_clip_1", "trimming", 15)
+                    cb("test_clip_1", "reframing", 35)
+                    cb("test_clip_1", "transcribing", 55)
+                    cb("test_clip_1", "subtitles", 75)
+                    cb("test_clip_1", "hooks", 90)
+                    cb("test_clip_1", "encoding", 100)
+                return {"processed": 1, "failed": 0, "items": []}
+
+            mock_pipeline.process_pending_shorts = fake_process_pending_shorts
+
+            with patch("app.api.routes.shorts.get_shorts_pipeline", return_value=mock_pipeline):
+                resp = self.client.post("/api/shorts/test_clip_1/process", json={})
+                self.assertEqual(resp.status_code, 200)
+
+        # Check emitted event types
+        event_types = [ev[0] for ev in broadcast_events]
+        self.assertIn("processing_started", event_types)
+        self.assertIn("processing_progress", event_types)
+        self.assertIn("processing_complete", event_types)
+
+        # Verify progress stages
+        progress_events = [ev[1] for ev in broadcast_events if ev[0] == "processing_progress"]
+        stages = [p["stage"] for p in progress_events]
+        self.assertEqual(stages, ["trimming", "reframing", "transcribing", "subtitles", "hooks", "encoding"])
+        self.assertEqual(progress_events[-1]["percentage"], 100)

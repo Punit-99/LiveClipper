@@ -39,12 +39,11 @@ yarn-error.log*
 .buffer/
 **/.buffer/
 backend/.buffer/
-clips/
-**/clips/
-backend/clips/
-shorts/
-**/shorts/
-backend/shorts/
+/clips/
+/backend/clips/
+/shorts/
+/backend/shorts/
+!backend/app/shorts/
 highlights.jsonl
 backend/highlights.jsonl
 scratch/
