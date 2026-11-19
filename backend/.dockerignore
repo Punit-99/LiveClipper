@@ -1,0 +1,17 @@
+.buffer/
+clips/
+shorts/
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.env.*
+node_modules/
+.DS_Store
+highlights.jsonl
+.youtube_tokens.json
+.git/
+.gitignore

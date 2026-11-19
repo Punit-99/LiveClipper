@@ -1,0 +1,35 @@
+# --- Secrets & local credentials (CRITICAL: NEVER COMMIT) ---
+.env
+*.env
+.env.*
+!.env.example
+*.tokens.json
+.tokens.json
+.youtube_tokens.json
+*.tmp
+
+# --- Python & Virtual Environments ---
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+.pytest_cache/
+.mypy_cache/
+
+# --- Runtime Media & Pipeline Outputs ---
+.buffer/
+clips/
+shorts/
+highlights.jsonl
+scratch/
+
+# --- OS / IDE Noise ---
+.DS_Store
+**/.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -1,0 +1,25 @@
+# LiveClipper backend dependencies.
+
+# Core LiveClipper Stream & Ingestion dependencies (Python 3.11 - 3.14)
+fastapi>=0.110.0,<1.0.0  # Web dashboard API server
+uvicorn>=0.28.0,<1.0.0   # ASGI web server
+requests>=2.32,<3        # HTTP client for Twitch Helix REST API calls
+python-dotenv>=1.0,<2    # loads configuration from the local .env file
+websockets>=13,<16       # async WebSocket client for Twitch IRC chat
+google-genai>=1.0,<2     # official Google GenAI SDK for Gemini highlight analysis
+streamlink>=8,<9         # Twitch live HLS stream capture (Stage 5)
+
+# Video Processing & ML Pipeline (Merged from OpenShorts)
+# Note on Python compatibility:
+# - Python 3.11 (Production / Docker): Fully supported. Used in backend/Dockerfile.
+#   Precompiled wheels exist for all packages below including torch, mediapipe, and faster-whisper.
+# - Python 3.14 (Local host environment): Core video processing (FFmpeg reframe, hook overlay,
+#   subtitle burning) works natively via defensive fallbacks. Precompiled wheels for
+#   faster-whisper (ctranslate2), mediapipe, and torch are not yet published for Python 3.14.
+#   Phase 3 Docker container ensures full ML pipeline availability.
+Pillow>=10.0.0,<14.0.0          # Hook banner image generation and subtitle styling
+opencv-python>=4.8.0,<5.0.0     # Computer vision and frame analysis
+scenedetect>=0.6.0,<0.8.0       # Scene cut detection for camera reframing
+faster-whisper>=1.0.0,<2.0.0    # Speech-to-text with word-level timestamps (ASR)
+mediapipe>=0.10.0,<0.11.0       # Face detection and speaker tracking for dynamic 9:16 crop
+torch>=2.0.0,<3.0.0             # Deep learning backend (CPU version for Docker)
