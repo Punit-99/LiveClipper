@@ -107,7 +107,8 @@ class Settings:
     openshorts_docker_image: str = "liveclipper/openshorts:latest"
     openshorts_docker_timeout: float = 600.0
     openshorts_subtitle_style: str = "bold"
-    openshorts_reframe_mode: str = "auto"
+    openshorts_reframe_mode: str = "split"
+    hook_overlay_enabled: bool = False
     # --- Stage 9: YouTube Viral Metadata Optimization Engine ---
     viral_metadata_enabled: bool = True
     viral_metadata_model: str = "gemini-2.5-flash"
@@ -202,8 +203,15 @@ def _tuple_env(name: str) -> tuple[str, ...]:
     return tuple(items)
 
 
-def load_settings() -> Settings:
+def load_settings(env_file: Path | str | None = None) -> Settings:
     """Read, validate, and return all settings. Raises ConfigError on problems."""
+    target_env = Path(env_file) if env_file else _env_file
+    try:
+        if target_env.is_file():
+            load_dotenv(target_env, override=True)
+    except OSError:
+        pass
+
     client_id = _require("TWITCH_CLIENT_ID")
     client_secret = _require("TWITCH_CLIENT_SECRET")
     redirect_uri = os.getenv("TWITCH_REDIRECT_URI", "http://localhost:3000").strip()
@@ -301,7 +309,8 @@ def load_settings() -> Settings:
         openshorts_docker_image=os.getenv("OPENSHORTS_DOCKER_IMAGE", "liveclipper/openshorts:latest").strip() or "liveclipper/openshorts:latest",
         openshorts_docker_timeout=_float_env("OPENSHORTS_DOCKER_TIMEOUT", 600.0),
         openshorts_subtitle_style=os.getenv("OPENSHORTS_SUBTITLE_STYLE", "bold").strip().lower() or "bold",
-        openshorts_reframe_mode=os.getenv("OPENSHORTS_REFRAME_MODE", "auto").strip().lower() or "auto",
+        openshorts_reframe_mode=os.getenv("OPENSHORTS_REFRAME_MODE", "split").strip().lower() or "split",
+        hook_overlay_enabled=_bool_env("HOOK_OVERLAY_ENABLED", False),
         viral_metadata_enabled=_bool_env("VIRAL_METADATA_ENABLED", True),
         viral_metadata_model=os.getenv("VIRAL_METADATA_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash",
         viral_title_emoji=_bool_env("VIRAL_TITLE_EMOJI", True),

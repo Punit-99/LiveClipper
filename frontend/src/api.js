@@ -123,6 +123,40 @@ export async function uploadSingleShort(clipId, payload = {}) {
   return res.json();
 }
 
+export async function verifyShortUpload(clipId) {
+  const res = await fetch(`${API_BASE}/upload/${clipId}/verify`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Verification failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function reuploadSingleShort(clipId, payload = {}) {
+  const res = await fetch(`${API_BASE}/upload/${clipId}/reupload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Re-upload failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function verifyAllUploads() {
+  const res = await fetch(`${API_BASE}/upload/verify-all`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Batch verification failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function autoUploadShorts(payload = {}) {
   const res = await fetch(`${API_BASE}/upload/auto`, {
     method: 'POST',

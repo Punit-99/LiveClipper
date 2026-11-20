@@ -218,7 +218,7 @@ class TestOpenShortsBridgeEngines(unittest.TestCase):
                 bridge.process_clip(clip)
 
     def test_openshorts_docker_call_arguments(self):
-        bridge = OpenShortsBridge(output_dir=self.work_dir, engine="openshorts")
+        bridge = OpenShortsBridge(output_dir=self.work_dir, engine="openshorts", hook_overlay_enabled=True)
         clip = _create_synthetic_clip(self.work_dir / "clip_docker.mp4", duration=1.0)
         sidecar = {
             "clip_id": "dock01",

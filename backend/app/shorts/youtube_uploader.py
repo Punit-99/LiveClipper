@@ -142,6 +142,16 @@ class DailyQuotaTracker:
                 self.max_units,
             )
 
+    def record_units(self, units: int = 1) -> None:
+        """Record arbitrary quota units consumed (e.g. video verification)."""
+        if units <= 0:
+            return
+        with self._lock:
+            status = self._get_status_locked()
+            status["units_used"] += units
+            status["updated_at"] = time.time()
+            self._write_quota_file_locked(status)
+
     def reset_today(self) -> None:
         """Reset quota for today (primarily for testing)."""
         with self._lock:
@@ -572,3 +582,174 @@ class YouTubeUploader:
         base = self.retry_delay * (2 ** attempt)
         jitter = random.uniform(0.0, 0.5)
         return round(base + jitter, 2)
+
+    def verify_video(self, video_id: str) -> dict[str, Any]:
+        """Verify whether a YouTube video exists and is accessible.
+
+        Calls YouTube Data API v3 videos.list endpoint:
+        GET https://www.googleapis.com/youtube/v3/videos?part=status,snippet&id={video_id}
+        Costs 1 YouTube quota unit.
+
+        Returns:
+            {"verified": True, "status": "public"|"unlisted"|"private", "video_id": video_id, "title": "..."}
+            or
+            {"verified": False, "reason": "not_found"|"deleted"|"rejected"|"private"|"no_video_id"|"auth_error", "video_id": video_id}
+        """
+        if not video_id or not str(video_id).strip():
+            return {"verified": False, "reason": "no_video_id", "video_id": ""}
+
+        clean_id = str(video_id).strip()
+        try:
+            token = self.token_manager.get_valid_access_token()
+        except Exception as exc:
+            log.warning("Could not obtain access token to verify video %s: %s", clean_id, exc)
+            return {"verified": False, "reason": "auth_error", "error": str(exc), "video_id": clean_id}
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        }
+        params = {
+            "part": "status,snippet",
+            "id": clean_id,
+        }
+        url = "https://www.googleapis.com/youtube/v3/videos"
+
+        try:
+            resp = self._session.get(url, headers=headers, params=params, timeout=10.0)
+            if self.quota_tracker:
+                self.quota_tracker.record_units(1)
+        except Exception as exc:
+            log.warning("Network failure verifying video %s: %s", clean_id, exc)
+            return {"verified": False, "reason": "network_error", "error": str(exc), "video_id": clean_id}
+
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+            except Exception:
+                return {"verified": False, "reason": "invalid_response", "video_id": clean_id}
+
+            items = data.get("items", [])
+            if not items:
+                return {"verified": False, "reason": "not_found", "video_id": clean_id}
+
+            item = items[0]
+            st = item.get("status", {})
+            upload_status = str(st.get("uploadStatus", "")).lower()
+            privacy_status = str(st.get("privacyStatus", "public")).lower()
+            rejection_reason = st.get("rejectionReason")
+
+            if upload_status in ("rejected", "failed", "deleted"):
+                return {
+                    "verified": False,
+                    "reason": rejection_reason or upload_status,
+                    "status": privacy_status,
+                    "video_id": clean_id,
+                }
+
+            return {
+                "verified": True,
+                "status": privacy_status,
+                "video_id": clean_id,
+                "title": item.get("snippet", {}).get("title", ""),
+            }
+
+        if resp.status_code == 404:
+            return {"verified": False, "reason": "not_found", "video_id": clean_id}
+
+        if resp.status_code == 403:
+            return {"verified": False, "reason": "permission_denied_or_quota", "video_id": clean_id}
+
+        return {"verified": False, "reason": f"http_{resp.status_code}", "video_id": clean_id}
+
+    def verify_videos(self, video_ids: list[str]) -> dict[str, Any]:
+        """Verify multiple YouTube videos in batches of up to 50 IDs per API call.
+
+        Each batch call costs 1 YouTube quota unit.
+
+        Returns:
+            {
+                "results": {video_id: {"verified": bool, "status": ..., "reason": ...}},
+                "units_used": int,
+            }
+        """
+        results: dict[str, dict[str, Any]] = {}
+        unique_ids = [str(vid).strip() for vid in video_ids if vid and str(vid).strip()]
+        if not unique_ids:
+            return {"results": {}, "units_used": 0}
+
+        try:
+            token = self.token_manager.get_valid_access_token()
+        except Exception as exc:
+            log.warning("Could not obtain access token for batch verification: %s", exc)
+            return {
+                "results": {
+                    vid: {"verified": False, "reason": "auth_error", "error": str(exc), "video_id": vid}
+                    for vid in unique_ids
+                },
+                "units_used": 0,
+            }
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        }
+        url = "https://www.googleapis.com/youtube/v3/videos"
+        units_used = 0
+
+        # Chunk into groups of 50
+        batch_size = 50
+        for i in range(0, len(unique_ids), batch_size):
+            chunk = unique_ids[i:i + batch_size]
+            params = {
+                "part": "status,snippet",
+                "id": ",".join(chunk),
+            }
+            try:
+                resp = self._session.get(url, headers=headers, params=params, timeout=15.0)
+                units_used += 1
+                if self.quota_tracker:
+                    self.quota_tracker.record_units(1)
+            except Exception as exc:
+                log.warning("Network failure during batch video verification: %s", exc)
+                for vid in chunk:
+                    results[vid] = {"verified": False, "reason": "network_error", "video_id": vid}
+                continue
+
+            if resp.status_code == 200:
+                try:
+                    data = resp.json()
+                except Exception:
+                    for vid in chunk:
+                        results[vid] = {"verified": False, "reason": "invalid_response", "video_id": vid}
+                    continue
+
+                items_by_id = {item.get("id"): item for item in data.get("items", []) if item.get("id")}
+                for vid in chunk:
+                    if vid in items_by_id:
+                        item = items_by_id[vid]
+                        st = item.get("status", {})
+                        upload_status = str(st.get("uploadStatus", "")).lower()
+                        privacy_status = str(st.get("privacyStatus", "public")).lower()
+                        rejection_reason = st.get("rejectionReason")
+                        if upload_status in ("rejected", "failed", "deleted"):
+                            results[vid] = {
+                                "verified": False,
+                                "reason": rejection_reason or upload_status,
+                                "status": privacy_status,
+                                "video_id": vid,
+                            }
+                        else:
+                            results[vid] = {
+                                "verified": True,
+                                "status": privacy_status,
+                                "video_id": vid,
+                                "title": item.get("snippet", {}).get("title", ""),
+                            }
+                    else:
+                        results[vid] = {"verified": False, "reason": "not_found", "video_id": vid}
+            else:
+                for vid in chunk:
+                    results[vid] = {"verified": False, "reason": f"http_{resp.status_code}", "video_id": vid}
+
+        return {"results": results, "units_used": units_used}

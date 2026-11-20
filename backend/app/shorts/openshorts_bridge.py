@@ -49,6 +49,7 @@ class OpenShortsBridge:
         reframe_mode: str = "auto",
         output_bitrate: str = "6M",
         output_crf: int = 18,
+        hook_overlay_enabled: bool = False,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.engine = str(engine or "auto").strip().lower()
@@ -64,6 +65,7 @@ class OpenShortsBridge:
         self.reframe_mode = str(reframe_mode or "auto").strip().lower()
         self.output_bitrate = str(output_bitrate or "6M").strip()
         self.output_crf = int(output_crf)
+        self.hook_overlay_enabled = bool(hook_overlay_enabled)
 
     def is_docker_available(self) -> bool:
         """Check if Docker CLI is installed and running."""
@@ -288,22 +290,31 @@ class OpenShortsBridge:
             except Exception:
                 pass
 
-        # Create hook banner image
+        # Create hook banner image if enabled
+        wants_hook = bool(self.hook_overlay_enabled and hook_title and hook_title.strip())
         banner_path = temp_dir / f"banner_{input_video.stem}.bmp"
-        create_hook_banner_bmp(
-            text=hook_title,
-            output_path=banner_path,
-            width=960,
-            height=200,
-            scale=4,
-        )
-
-        filter_complex = (
-            "[0:v]scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,boxblur=20:5[bg];"
-            "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos[fg];"
-            "[bg][fg]overlay=(W-w)/2:(H-h)/2[base];"
-            "[base][1:v]overlay=(W-w)/2:220:enable='between(t,0,4)'[v_out]"
-        )
+        if wants_hook:
+            create_hook_banner_bmp(
+                text=hook_title,
+                output_path=banner_path,
+                width=960,
+                height=200,
+                scale=4,
+            )
+            filter_complex = (
+                "[0:v]scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,boxblur=20:5[bg];"
+                "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos[fg];"
+                "[bg][fg]overlay=(W-w)/2:(H-h)/2[base];"
+                "[base][1:v]overlay=(W-w)/2:220:enable='between(t,0,4)'[v_out]"
+            )
+            extra_inputs = ["-i", str(banner_path)]
+        else:
+            filter_complex = (
+                "[0:v]scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,boxblur=20:5[bg];"
+                "[0:v]scale=1080:1920:force_original_aspect_ratio=decrease:flags=lanczos[fg];"
+                "[bg][fg]overlay=(W-w)/2:(H-h)/2[v_out]"
+            )
+            extra_inputs = []
 
         if progress_callback:
             try:
@@ -317,8 +328,7 @@ class OpenShortsBridge:
             "-y",
             "-i",
             str(input_video),
-            "-i",
-            str(banner_path),
+            *extra_inputs,
             "-filter_complex",
             filter_complex,
             "-map",
@@ -382,7 +392,7 @@ class OpenShortsBridge:
                 "run",
                 "--rm",
                 "-e",
-                "AUTO_HOOK=1",
+                f"AUTO_HOOK={1 if self.hook_overlay_enabled else 0}",
                 "-e",
                 f"VIRAL_HOOK_TEXT={hook_title}",
                 "-e",
@@ -535,7 +545,7 @@ class OpenShortsBridge:
                 )
 
             # 3. Hook Overlay & Subtitle Burning
-            wants_hook = bool(hook_title and hook_title.strip())
+            wants_hook = bool(self.hook_overlay_enabled and hook_title and hook_title.strip())
             curr_video = framed_path
 
             if progress_callback:

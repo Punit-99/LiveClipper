@@ -560,5 +560,115 @@ class TestYouTubeUploader(unittest.TestCase):
         self.token_manager.refresh_access_token.assert_called_once()
 
 
+class TestYouTubeVerification(unittest.TestCase):
+    """Tests for verifying YouTube videos and batch status queries."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.tokens_path = Path(self.tmp_dir.name) / ".youtube_tokens.json"
+        self.quota_path = Path(self.tmp_dir.name) / ".youtube_quota.json"
+        self.session = MagicMock(spec=requests.Session)
+        self.token_manager = MagicMock(spec=YouTubeTokenManager)
+        self.token_manager.get_valid_access_token.return_value = "fake-access-token"
+        self.quota_tracker = DailyQuotaTracker(quota_path=self.quota_path, max_units=10000)
+        self.uploader = YouTubeUploader(
+            token_manager=self.token_manager,
+            quota_tracker=self.quota_tracker,
+            session=self.session,
+        )
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    def test_record_units_increments_units_used(self):
+        self.quota_tracker.record_units(5)
+        status = self.quota_tracker.get_status()
+        self.assertEqual(status["units_used"], 5)
+        self.quota_tracker.record_units(3)
+        status2 = self.quota_tracker.get_status()
+        self.assertEqual(status2["units_used"], 8)
+
+    def test_verify_video_public_processed(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "items": [
+                {
+                    "id": "vid123",
+                    "snippet": {"title": "Awesome Short"},
+                    "status": {
+                        "uploadStatus": "processed",
+                        "privacyStatus": "public",
+                    },
+                }
+            ]
+        }
+        self.session.get.return_value = mock_resp
+
+        res = self.uploader.verify_video("vid123")
+        self.assertTrue(res["verified"])
+        self.assertEqual(res["status"], "public")
+        self.assertEqual(res["video_id"], "vid123")
+        self.assertEqual(self.quota_tracker.get_status()["units_used"], 1)
+
+    def test_verify_video_not_found(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"items": []}
+        self.session.get.return_value = mock_resp
+
+        res = self.uploader.verify_video("vid_missing")
+        self.assertFalse(res["verified"])
+        self.assertEqual(res["reason"], "not_found")
+        self.assertEqual(res["video_id"], "vid_missing")
+
+    def test_verify_video_rejected_or_deleted(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "items": [
+                {
+                    "id": "vid_bad",
+                    "status": {
+                        "uploadStatus": "rejected",
+                        "privacyStatus": "private",
+                        "rejectionReason": "termsOfService",
+                    },
+                }
+            ]
+        }
+        self.session.get.return_value = mock_resp
+
+        res = self.uploader.verify_video("vid_bad")
+        self.assertFalse(res["verified"])
+        self.assertEqual(res["reason"], "termsOfService")
+
+    def test_verify_video_empty_id(self):
+        res = self.uploader.verify_video("")
+        self.assertFalse(res["verified"])
+        self.assertEqual(res["reason"], "no_video_id")
+
+    def test_verify_videos_batch(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "items": [
+                {
+                    "id": "vid1",
+                    "snippet": {"title": "Short 1"},
+                    "status": {"uploadStatus": "processed", "privacyStatus": "public"},
+                }
+            ]
+        }
+        self.session.get.return_value = mock_resp
+
+        res = self.uploader.verify_videos(["vid1", "vid_not_found"])
+        self.assertEqual(res["units_used"], 1)
+        results = res["results"]
+        self.assertTrue(results["vid1"]["verified"])
+        self.assertFalse(results["vid_not_found"]["verified"])
+        self.assertEqual(results["vid_not_found"]["reason"], "not_found")
+
+
 if __name__ == "__main__":
     unittest.main()

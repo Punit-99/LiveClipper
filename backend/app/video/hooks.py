@@ -71,34 +71,15 @@ def create_hook_banner(
         pill_x = (width - pill_w) // 2
         pill_y = (height - pill_h) // 2
 
-        if style == "pill":
-            # Solid vibrant pill with border
-            draw.rounded_rectangle(
-                [pill_x, pill_y, pill_x + pill_w, pill_y + pill_h],
-                radius=min(pill_h // 2, 32),
-                fill=(20, 20, 24, 235),
-                outline=(255, 230, 0, 255),
-                width=4,
-            )
-        elif style == "banner":
-            # Rectangular banner
-            draw.rectangle(
-                [pill_x, pill_y, pill_x + pill_w, pill_y + pill_h],
-                fill=(0, 0, 0, 220),
-                outline=(255, 255, 255, 255),
-                width=3,
-            )
-        else:
-            # Minimal
-            draw.rounded_rectangle(
-                [pill_x, pill_y, pill_x + pill_w, pill_y + pill_h],
-                radius=20,
-                fill=(10, 10, 12, 210),
-            )
-
-        # Center text
+        # No background box/pill - clean white text with subtle drop shadow
         t_x = (width - text_w) // 2 - bbox[0]
         t_y = (height - text_h) // 2 - bbox[1]
+
+        # Draw subtle drop shadow
+        for dx, dy in ((-2, -2), (2, -2), (-2, 2), (2, 2), (0, 3), (3, 0), (2, 2)):
+            draw.text((t_x + dx, t_y + dy), clean_text, font=font, fill=(0, 0, 0, 220))
+
+        # Center text in clean white
         draw.text((t_x, t_y), clean_text, font=font, fill=(255, 255, 255, 255))
 
         png_path = out.with_suffix(".png")

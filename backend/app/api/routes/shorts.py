@@ -157,6 +157,10 @@ def list_shorts(
             "updated_at": rec.get("updated_at_iso") or "",
             "recorded_at_iso": orig_recorded_iso or rec.get("updated_at_iso") or "",
             "processed_at_iso": processed_iso or rec.get("updated_at_iso") or "",
+            "youtube_verified": rec.get("youtube_verified"),
+            "youtube_verified_at": rec.get("youtube_verified_at"),
+            "youtube_verify_reason": rec.get("youtube_verify_reason"),
+            "youtube_status": rec.get("youtube_status"),
         })
 
     output.sort(key=lambda x: x.get("processed_at_iso") or x.get("updated_at", ""), reverse=True)

@@ -10,6 +10,7 @@ Provides intelligent multi-mode vertical video reframing:
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import tempfile
@@ -176,17 +177,163 @@ def wide_filtergraph(out_w: int, out_h: int) -> str:
     )
 
 
-def split_filtergraph(orig_w: int, orig_h: int, out_w: int, out_h: int) -> str:
-    """Generate split layout filtergraph: top and bottom halves stacked."""
-    half_h = out_h // 2
-    crop_w = int(orig_h * (out_w / half_h))
-    crop_w = min(orig_w, crop_w)
-    x_left = max(0, (orig_w // 2 - crop_w) // 2)
-    x_right = min(orig_w - crop_w, orig_w // 2 + x_left)
+def detect_facecam_box(
+    video_path: str | Path,
+    orig_w: int,
+    orig_h: int,
+    sample_count: int = 5,
+) -> tuple[int, int, int, int] | None:
+    """Detect stationary streamer facecam region across sampled frames.
+
+    Returns (crop_x, crop_y, crop_w, crop_h) bounding box for top ~40% facecam section,
+    or None if no facecam detected.
+    """
+    try:
+        import cv2
+    except (ImportError, Exception):
+        return None
+
+    try:
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            return None
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames <= 0:
+            cap.release()
+            return None
+
+        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        face_cascade = cv2.CascadeClassifier(cascade_path)
+        if face_cascade.empty():
+            cap.release()
+            return None
+
+        sample_fractions = [0.1, 0.25, 0.5, 0.75, 0.9] if sample_count >= 5 else [0.25, 0.5, 0.75]
+        detections: list[tuple[int, int, int, int]] = []
+
+        for p in sample_fractions:
+            frame_idx = int(p * total_frames)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(
+                gray,
+                scaleFactor=1.1,
+                minNeighbors=4,
+                minSize=(30, 30),
+            )
+            for (x, y, w, h) in faces:
+                detections.append((int(x), int(y), int(w), int(h)))
+
+        cap.release()
+
+        if not detections:
+            return None
+
+        # Cluster detections across sample frames by center distance
+        clusters: list[list[tuple[int, int, int, int]]] = []
+        for det in detections:
+            cx, cy = det[0] + det[2] / 2.0, det[1] + det[3] / 2.0
+            matched = False
+            for cluster in clusters:
+                avg_cx = sum(item[0] + item[2] / 2.0 for item in cluster) / len(cluster)
+                avg_cy = sum(item[1] + item[3] / 2.0 for item in cluster) / len(cluster)
+                if math.hypot(cx - avg_cx, cy - avg_cy) < 80.0:
+                    cluster.append(det)
+                    matched = True
+                    break
+            if not matched:
+                clusters.append([det])
+
+        # Prioritize clusters detected in multiple frames (stationary streamer facecam)
+        valid_clusters = [c for c in clusters if len(c) >= 2] or clusters
+        if not valid_clusters:
+            return None
+
+        # Rank by count descending, then largest average face area
+        best_cluster = max(
+            valid_clusters,
+            key=lambda c: (len(c), sum(item[2] * item[3] for item in c) / len(c)),
+        )
+
+        avg_x = sum(item[0] for item in best_cluster) / len(best_cluster)
+        avg_y = sum(item[1] for item in best_cluster) / len(best_cluster)
+        avg_w = sum(item[2] for item in best_cluster) / len(best_cluster)
+        avg_h = sum(item[3] for item in best_cluster) / len(best_cluster)
+
+        # Target top ~40% section: 1080x768 -> aspect ratio 1.40625
+        top_aspect = 1080.0 / 768.0
+        crop_h = int(max(avg_h * 3.8, orig_h * 0.28, 280))
+        crop_w = int(round(crop_h * top_aspect))
+
+        if crop_w > orig_w:
+            crop_w = orig_w
+            crop_h = int(round(crop_w / top_aspect))
+        if crop_h > orig_h:
+            crop_h = orig_h
+            crop_w = int(round(crop_h * top_aspect))
+
+        cx = avg_x + avg_w / 2.0
+        cy = avg_y + avg_h / 2.0
+        crop_x = int(cx - crop_w / 2.0)
+        crop_y = int(cy - crop_h / 2.0)
+
+        crop_x = max(0, min(orig_w - crop_w, crop_x))
+        crop_y = max(0, min(orig_h - crop_h, crop_y))
+
+        # Ensure even coordinates
+        crop_w -= crop_w % 2
+        crop_h -= crop_h % 2
+        crop_x -= crop_x % 2
+        crop_y -= crop_y % 2
+
+        return crop_x, crop_y, crop_w, crop_h
+    except Exception as exc:
+        log.debug("Facecam detection failed: %s", exc)
+        return None
+
+
+def split_filtergraph(
+    orig_w: int,
+    orig_h: int,
+    out_w: int,
+    out_h: int,
+    face_box: tuple[int, int, int, int] | None = None,
+) -> str:
+    """Generate split layout filtergraph: facecam top (~40%), gameplay bottom (~60%).
+
+    If face_box is None, falls back to wide letterbox with blurred background.
+    """
+    if face_box is None:
+        return wide_filtergraph(out_w, out_h)
+
+    crop_x, crop_y, crop_w, crop_h = face_box
+    top_h = int(round(out_h * 0.40))  # 768 for 1920
+    top_h -= top_h % 2
+    bot_h = out_h - top_h             # 1152 for 1920
+
+    # Bottom gameplay crop (centered horizontally)
+    bot_aspect = out_w / bot_h
+    bot_crop_h = orig_h
+    bot_crop_w = int(round(orig_h * bot_aspect))
+    if bot_crop_w > orig_w:
+        bot_crop_w = orig_w
+        bot_crop_h = int(round(bot_crop_w / bot_aspect))
+    bot_crop_w -= bot_crop_w % 2
+    bot_crop_h -= bot_crop_h % 2
+    bot_crop_x = max(0, (orig_w - bot_crop_w) // 2)
+    bot_crop_x -= bot_crop_x % 2
+    bot_crop_y = max(0, (orig_h - bot_crop_h) // 2)
+    bot_crop_y -= bot_crop_y % 2
 
     return (
-        f"[0:v]crop={crop_w}:{orig_h}:{x_left}:0,scale={out_w}:{half_h}:flags=lanczos[top];"
-        f"[0:v]crop={crop_w}:{orig_h}:{x_right}:0,scale={out_w}:{half_h}:flags=lanczos[bot];"
+        f"[0:v]crop={crop_w}:{crop_h}:{crop_x}:{crop_y},"
+        f"scale={out_w}:{top_h}:flags=lanczos[top];"
+        f"[0:v]crop={bot_crop_w}:{bot_crop_h}:{bot_crop_x}:{bot_crop_y},"
+        f"scale={out_w}:{bot_h}:flags=lanczos[bot];"
         f"[top][bot]vstack,setsar=1[v]"
     )
 
@@ -244,7 +391,10 @@ def reframe_video(
 
     # Build filtergraph based on resolved mode
     if actual_mode == "split":
-        filter_str = split_filtergraph(orig_w, orig_h, out_w, out_h)
+        face_box = detect_facecam_box(in_path, orig_w, orig_h)
+        if face_box is None:
+            log.info("No facecam detected in %s; falling back to wide layout", in_path.name)
+        filter_str = split_filtergraph(orig_w, orig_h, out_w, out_h, face_box=face_box)
     elif actual_mode == "track":
         cameraman = SmoothedCameraman(out_w, out_h, orig_w, orig_h, aspect_ratio)
         crop_x = cameraman.get_crop_x(force_snap=True)

@@ -196,6 +196,7 @@ class ShortsPipeline:
             reframe_mode=self.settings.openshorts_reframe_mode,
             output_bitrate=self.settings.shorts_output_bitrate,
             output_crf=self.settings.shorts_output_crf,
+            hook_overlay_enabled=getattr(self.settings, "hook_overlay_enabled", False),
         )
 
         if viral_generator is not None:

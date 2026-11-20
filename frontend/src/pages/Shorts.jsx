@@ -10,9 +10,20 @@ import {
   X, 
   Loader2, 
   Trash2,
-  AlertTriangle
+  AlertTriangle,
+  ShieldCheck,
+  RotateCw
 } from 'lucide-react';
-import { formatDuration, formatDateTime, formatRelativeTime, deleteSingleShort, deleteAllShorts } from '../api';
+import { 
+  formatDuration, 
+  formatDateTime, 
+  formatRelativeTime, 
+  deleteSingleShort, 
+  deleteAllShorts,
+  verifyShortUpload,
+  reuploadSingleShort,
+  verifyAllUploads
+} from '../api';
 import { formatChannelName } from '../utils/channels';
 
 export default function Shorts({ 
@@ -28,6 +39,11 @@ export default function Shorts({
 }) {
   const [selectedShort, setSelectedShort] = useState(null);
   const [uploadingId, setUploadingId] = useState(null);
+  const [reuploadingId, setReuploadingId] = useState(null);
+  const [verifyingId, setVerifyingId] = useState(null);
+  const [isVerifyingAll, setIsVerifyingAll] = useState(false);
+  const [batchVerifySummary, setBatchVerifySummary] = useState(null);
+  const [verificationMap, setVerificationMap] = useState({});
   const [privacyMap, setPrivacyMap] = useState({});
   const [shortToDelete, setShortToDelete] = useState(null);
   const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
@@ -47,8 +63,84 @@ export default function Shorts({
         selected_title: chosenTitle,
         privacy_status: privacy,
       });
+      if (onRefresh) onRefresh();
     } finally {
       setUploadingId(null);
+    }
+  };
+
+  const handleVerifySingle = async (shortId) => {
+    setVerifyingId(shortId);
+    try {
+      const res = await verifyShortUpload(shortId);
+      setVerificationMap(prev => ({
+        ...prev,
+        [shortId]: {
+          verified: res.verified,
+          status: res.status,
+          reason: res.reason,
+        }
+      }));
+      if (res.verified) {
+        if (showToast) showToast('Verified on YouTube ✓', 'success');
+      } else {
+        if (showToast) showToast(`Video not found on YouTube (${res.reason || 'not found'})`, 'error');
+      }
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Verification failed', 'error');
+    } finally {
+      setVerifyingId(null);
+    }
+  };
+
+  const handleReuploadSingle = async (short) => {
+    setReuploadingId(short.id);
+    const chosenTitle = short.selected_title || short.title;
+    const privacy = privacyMap[short.id] || 'public';
+    try {
+      await reuploadSingleShort(short.id, {
+        selected_title: chosenTitle,
+        privacy_status: privacy,
+      });
+      setVerificationMap(prev => ({
+        ...prev,
+        [short.id]: { verified: true, status: privacy }
+      }));
+      if (showToast) showToast('Short re-uploaded successfully! ✓', 'success');
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Re-upload failed', 'error');
+    } finally {
+      setReuploadingId(null);
+    }
+  };
+
+  const handleVerifyAll = async () => {
+    setIsVerifyingAll(true);
+    try {
+      const res = await verifyAllUploads();
+      setBatchVerifySummary(res);
+      if (res.results) {
+        setVerificationMap(prev => ({
+          ...prev,
+          ...res.results,
+        }));
+      }
+      const msg = `${res.verified_count} verified, ${res.not_found_count} not found`;
+      if (showToast) {
+        showToast(
+          res.not_found_count > 0 
+            ? `Verification complete: ${msg}` 
+            : `All ${res.verified_count} uploads verified on YouTube ✓`, 
+          res.not_found_count > 0 ? 'warning' : 'success'
+        );
+      }
+      if (onRefresh) onRefresh();
+    } catch (err) {
+      if (showToast) showToast(err.message || 'Batch verification failed', 'error');
+    } finally {
+      setIsVerifyingAll(false);
     }
   };
 
@@ -107,6 +199,26 @@ export default function Shorts({
         </div>
 
         <div className="flex flex-wrap items-center gap-3 self-start sm:self-auto">
+          {/* Batch Verify Button */}
+          <button
+            onClick={handleVerifyAll}
+            disabled={isVerifyingAll || !shorts.some(s => s.state === 'UPLOADED' || s.youtube_url || s.youtube_id)}
+            className="flex items-center space-x-2 px-4 py-2.5 border border-blue-500/40 text-blue-300 hover:bg-blue-500/10 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-sm font-semibold transition-all"
+            title="Batch check all uploaded Shorts against YouTube Data API (1 quota unit)"
+          >
+            {isVerifyingAll ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-blue-400" />
+                <span>Verifying Uploads...</span>
+              </>
+            ) : (
+              <>
+                <ShieldCheck className="w-4 h-4 text-blue-400" />
+                <span>Verify All Uploads</span>
+              </>
+            )}
+          </button>
+
           <button
             onClick={() => setShowDeleteAllModal(true)}
             disabled={!shorts.length || isDeletingAll}
@@ -145,11 +257,45 @@ export default function Shorts({
         </div>
       </div>
 
+      {/* Batch Verify Summary Notification */}
+      {batchVerifySummary && (
+        <div className={`p-4 rounded-xl flex items-center justify-between text-xs border animate-in fade-in duration-200 ${
+          batchVerifySummary.not_found_count > 0 
+            ? 'bg-amber-950/40 border-amber-500/40 text-amber-200' 
+            : 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+        }`}>
+          <div className="flex items-center space-x-2.5">
+            {batchVerifySummary.not_found_count > 0 ? (
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            )}
+            <span>
+              Upload Verification: <strong>{batchVerifySummary.verified_count} verified</strong>
+              {batchVerifySummary.not_found_count > 0 && <>, <strong className="text-red-300">{batchVerifySummary.not_found_count} not found on YouTube</strong></>}
+              {' '}({batchVerifySummary.quota_units_used || 1} quota unit used
+              {batchVerifySummary.remaining_units !== null && `, ${batchVerifySummary.remaining_units.toLocaleString()} units remaining`})
+            </span>
+          </div>
+          <button
+            onClick={() => setBatchVerifySummary(null)}
+            className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-[#182030]"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Grid of Clean Vertical 9:16 Shorts Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
         {shorts.map((short) => {
+          const vInfo = verificationMap[short.id];
+          const isVerified = vInfo ? (vInfo.verified === true) : (short.youtube_verified === true);
+          const isNotFound = vInfo ? (vInfo.verified === false) : (short.youtube_verified === false);
           const isUploaded = short.state === 'UPLOADED' || Boolean(short.youtube_url) || Boolean(short.youtube_id);
-          const isUploadingThis = uploadingId === short.id;
+          const isFailed = short.state === 'FAILED';
+          const isUploadingThis = uploadingId === short.id || reuploadingId === short.id;
+          const isVerifyingThis = verifyingId === short.id || isVerifyingAll;
           const currentPrivacy = privacyMap[short.id] || 'public';
           const viralTitle = short.selected_title || short.title || 'Live Stream Highlight';
 
@@ -206,13 +352,23 @@ export default function Shorts({
                   {formatDuration(short.duration)}
                 </div>
 
-                {/* Upload Status Overlay if already uploaded */}
-                {isUploaded && (
+                {/* Upload Status Overlay on Thumbnail */}
+                {isNotFound ? (
+                  <div className="absolute bottom-3 left-3 flex items-center space-x-1 bg-red-600/95 backdrop-blur-md px-2 py-0.5 rounded text-[11px] font-bold text-white shadow-md">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    <span>Not Found on YT</span>
+                  </div>
+                ) : isVerified ? (
+                  <div className="absolute bottom-3 left-3 flex items-center space-x-1 bg-emerald-600/95 backdrop-blur-md px-2 py-0.5 rounded text-[11px] font-bold text-white shadow-md">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Verified ✓</span>
+                  </div>
+                ) : isUploaded ? (
                   <div className="absolute bottom-3 left-3 flex items-center space-x-1 bg-emerald-600/90 backdrop-blur-md px-2 py-0.5 rounded text-[11px] font-bold text-white shadow-md">
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     <span>Uploaded</span>
                   </div>
-                )}
+                ) : null}
               </div>
 
               {/* Card Body */}
@@ -238,53 +394,173 @@ export default function Shorts({
 
                 {/* Upload Button & Status Section */}
                 <div className="pt-2 border-t border-[#1f293d]/80">
-                  {isUploaded ? (
-                    <div className="flex items-center justify-between p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
-                      <div className="flex items-center space-x-1.5 text-xs font-bold text-emerald-400">
-                        <CheckCircle2 className="w-4 h-4 shrink-0" />
-                        <span>Uploaded</span>
+                  {isUploadingThis ? (
+                    <div className="flex items-center justify-center space-x-2 py-2 px-3 bg-[#182030] rounded-xl border border-[#24334f] text-xs font-semibold text-slate-300">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-red-400" />
+                      <span>Uploading...</span>
+                    </div>
+                  ) : isVerifyingThis ? (
+                    <div className="flex items-center justify-center space-x-2 py-2 px-3 bg-[#182030] rounded-xl border border-[#24334f] text-xs font-semibold text-slate-300">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
+                      <span>Verifying on YouTube...</span>
+                    </div>
+                  ) : isNotFound ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between p-2 rounded-xl bg-red-500/10 border border-red-500/30 text-xs">
+                        <div className="flex items-center space-x-1.5 text-red-400 font-bold">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                          <span>Not found on YouTube</span>
+                        </div>
+                        <button
+                          onClick={() => handleVerifySingle(short.id)}
+                          className="text-[11px] text-slate-400 hover:text-white underline ml-1"
+                          title="Re-check YouTube status"
+                        >
+                          Verify
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={currentPrivacy}
+                          onChange={(e) => handlePrivacyChange(short.id, e.target.value)}
+                          className="bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-red-500 shrink-0"
+                        >
+                          <option value="public">Public</option>
+                          <option value="unlisted">Unlisted</option>
+                          <option value="private">Private</option>
+                        </select>
+                        <button
+                          onClick={() => handleReuploadSingle(short)}
+                          disabled={quota && quota.can_upload === false}
+                          className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-1.5 text-xs font-bold text-white bg-red-600 hover:bg-red-500 disabled:opacity-50 rounded-xl transition-all shadow-md shadow-red-500/20"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Re-upload</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : isVerified ? (
+                    <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-1.5 text-xs font-bold text-emerald-400">
+                          <CheckCircle2 className="w-4 h-4 shrink-0" />
+                          <span>Verified ✓</span>
+                        </div>
+                        <button
+                          onClick={() => handleVerifySingle(short.id)}
+                          title="Verify again against YouTube API"
+                          className="text-[11px] font-semibold text-slate-400 hover:text-slate-200 px-1.5 py-0.5 rounded hover:bg-[#182030] transition-colors"
+                        >
+                          Verify
+                        </button>
                       </div>
                       {(short.youtube_url || short.youtube_id) && (
-                        <a
-                          href={short.youtube_url || `https://youtube.com/shorts/${short.youtube_id}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center space-x-1 text-xs font-semibold text-blue-400 hover:text-blue-300 ml-2"
-                        >
-                          <span>YouTube Link</span>
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </a>
+                        <div className="flex items-center justify-between pt-0.5">
+                          <a
+                            href={short.youtube_url || `https://youtube.com/shorts/${short.youtube_id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center space-x-1 text-xs font-semibold text-blue-400 hover:text-blue-300"
+                          >
+                            <span>View on YouTube</span>
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                          <button
+                            onClick={() => handleReuploadSingle(short)}
+                            className="text-[11px] text-slate-400 hover:text-red-400 transition-colors"
+                            title="Re-upload video again"
+                          >
+                            Re-upload
+                          </button>
+                        </div>
                       )}
                     </div>
+                  ) : isUploaded ? (
+                    <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-1.5 text-xs font-bold text-emerald-400">
+                          <CheckCircle2 className="w-4 h-4 shrink-0" />
+                          <span>Uploaded ✓</span>
+                        </div>
+                        <button
+                          onClick={() => handleVerifySingle(short.id)}
+                          className="text-xs font-bold text-blue-400 hover:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20 px-2 py-0.5 rounded-lg border border-blue-500/30 transition-colors"
+                          title="Verify if video still exists on YouTube"
+                        >
+                          Verify
+                        </button>
+                      </div>
+                      {(short.youtube_url || short.youtube_id) && (
+                        <div className="flex items-center justify-between pt-0.5">
+                          <a
+                            href={short.youtube_url || `https://youtube.com/shorts/${short.youtube_id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center space-x-1 text-xs font-semibold text-blue-400 hover:text-blue-300"
+                          >
+                            <span>YouTube Link</span>
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                          <button
+                            onClick={() => handleReuploadSingle(short)}
+                            className="text-[11px] text-slate-400 hover:text-red-400 transition-colors"
+                            title="Re-upload video again"
+                          >
+                            Re-upload
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ) : isFailed ? (
+                    <div className="p-2.5 bg-red-500/10 border border-red-500/20 rounded-xl space-y-2">
+                      <div className="flex items-center space-x-1.5 text-xs font-bold text-red-400">
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                        <span>Upload failed</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={currentPrivacy}
+                          onChange={(e) => handlePrivacyChange(short.id, e.target.value)}
+                          className="bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-red-500 shrink-0"
+                        >
+                          <option value="public">Public</option>
+                          <option value="unlisted">Unlisted</option>
+                          <option value="private">Private</option>
+                        </select>
+                        <button
+                          onClick={() => handleUploadSingle(short)}
+                          disabled={quota && quota.can_upload === false}
+                          className="flex-1 flex items-center justify-center space-x-1 px-3 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-500 rounded-xl transition-all shadow-sm"
+                        >
+                          <span>Retry</span>
+                        </button>
+                      </div>
+                    </div>
                   ) : (
-                    <div className="flex items-center gap-2">
-                      <select
-                        value={currentPrivacy}
-                        onChange={(e) => handlePrivacyChange(short.id, e.target.value)}
-                        className="bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-red-500 shrink-0"
-                      >
-                        <option value="public">Public</option>
-                        <option value="unlisted">Unlisted</option>
-                        <option value="private">Private</option>
-                      </select>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-xs text-slate-400 font-semibold px-1">
+                        <span>Not uploaded</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={currentPrivacy}
+                          onChange={(e) => handlePrivacyChange(short.id, e.target.value)}
+                          className="bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-red-500 shrink-0"
+                        >
+                          <option value="public">Public</option>
+                          <option value="unlisted">Unlisted</option>
+                          <option value="private">Private</option>
+                        </select>
 
-                      <button
-                        onClick={() => handleUploadSingle(short)}
-                        disabled={isUploadingThis || (quota && quota.can_upload === false)}
-                        className="flex-1 flex items-center justify-center space-x-1 px-3 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-500 disabled:opacity-50 rounded-xl transition-all shadow-sm shadow-red-500/20"
-                      >
-                        {isUploadingThis ? (
-                          <>
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            <span>Uploading...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Upload className="w-3.5 h-3.5" />
-                            <span>Upload to YouTube</span>
-                          </>
-                        )}
-                      </button>
+                        <button
+                          onClick={() => handleUploadSingle(short)}
+                          disabled={quota && quota.can_upload === false}
+                          className="flex-1 flex items-center justify-center space-x-1 px-3 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-500 disabled:opacity-50 rounded-xl transition-all shadow-sm shadow-red-500/20"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Upload</span>
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>

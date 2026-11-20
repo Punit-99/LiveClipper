@@ -55,18 +55,9 @@ def _write_env_file(updates: dict[str, Any]) -> None:
         if key not in updated_keys:
             new_lines.append(f"{key}={val}\n")
 
-    # Write updates to .env (handles both local filesystem and Docker bind mount)
-    temp_path = ENV_PATH.with_suffix(".tmp")
-    try:
-        with open(temp_path, "w", encoding="utf-8") as fh:
-            fh.writelines(new_lines)
-        os.replace(temp_path, ENV_PATH)
-    except OSError:
-        # Fallback when .env is bind-mounted in Docker (os.replace fails with EBUSY)
-        with open(ENV_PATH, "w", encoding="utf-8") as fh:
-            fh.writelines(new_lines)
-        if temp_path.exists():
-            temp_path.unlink(missing_ok=True)
+    # Write updates directly to .env to preserve inode across Docker bind mounts
+    with open(ENV_PATH, "w", encoding="utf-8") as fh:
+        fh.writelines(new_lines)
 
     # Update in-memory os.environ so load_settings picks up new values
     for k, v in updates.items():
@@ -93,6 +84,7 @@ def get_settings() -> dict[str, Any]:
         "shorts_engine": env_raw.get("SHORTS_ENGINE") or cfg.shorts_engine,
         "subtitle_style": env_raw.get("OPENSHORTS_SUBTITLE_STYLE") or cfg.openshorts_subtitle_style,
         "reframe_mode": env_raw.get("OPENSHORTS_REFRAME_MODE") or cfg.openshorts_reframe_mode,
+        "hook_overlay_enabled": env_raw.get("HOOK_OVERLAY_ENABLED", "false").lower() == "true",
         "youtube_privacy_status": env_raw.get("YOUTUBE_PRIVACY_STATUS") or cfg.youtube_privacy_status,
         "youtube_min_score": int(env_raw.get("YOUTUBE_MIN_SCORE") or cfg.youtube_min_score),
         "youtube_daily_limit": int(env_raw.get("YOUTUBE_DAILY_LIMIT") or cfg.youtube_daily_limit),
@@ -125,6 +117,7 @@ def update_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "shorts_engine": "SHORTS_ENGINE",
         "subtitle_style": "OPENSHORTS_SUBTITLE_STYLE",
         "reframe_mode": "OPENSHORTS_REFRAME_MODE",
+        "hook_overlay_enabled": "HOOK_OVERLAY_ENABLED",
         "youtube_privacy_status": "YOUTUBE_PRIVACY_STATUS",
         "youtube_min_score": "YOUTUBE_MIN_SCORE",
         "youtube_daily_limit": "YOUTUBE_DAILY_LIMIT",

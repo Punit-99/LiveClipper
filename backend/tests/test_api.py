@@ -468,3 +468,134 @@ class TestDashboardAPI(TestCase):
             self.assertIn("recorded_at_iso", shorts[0])
             self.assertIn("processed_at_iso", shorts[0])
 
+    def test_verify_single_short_endpoint(self) -> None:
+        """GET /api/upload/{id}/verify checks video status and updates manifest."""
+        mock_pipeline = MagicMock()
+        mock_uploader = MagicMock()
+        mock_pipeline.uploader = mock_uploader
+        mock_pipeline.manifest.get.return_value = {
+            "clip_id": "short_001",
+            "youtube_id": "vid_xyz123",
+            "state": "UPLOADED",
+        }
+        mock_uploader.verify_video.return_value = {
+            "verified": True,
+            "status": "public",
+            "video_id": "vid_xyz123",
+        }
+        mock_tracker = MagicMock()
+        mock_tracker.max_units = 10000
+        mock_tracker.get_status.return_value = {"units_used": 50}
+        mock_uploader.quota_tracker = mock_tracker
+
+        with patch("app.api.routes.upload.get_shorts_pipeline", return_value=mock_pipeline):
+            resp = self.client.get("/api/upload/short_001/verify")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertTrue(data["verified"])
+            self.assertEqual(data["status"], "public")
+            self.assertEqual(data["video_id"], "vid_xyz123")
+            mock_pipeline.manifest.update_record.assert_called_once()
+            call_kwargs = mock_pipeline.manifest.update_record.call_args[1]
+            self.assertEqual(call_kwargs["clip_id"], "short_001")
+            self.assertTrue(call_kwargs["youtube_verified"])
+
+    def test_verify_single_short_not_found_endpoint(self) -> None:
+        """GET /api/upload/{id}/verify returns verified=False when video missing."""
+        mock_pipeline = MagicMock()
+        mock_uploader = MagicMock()
+        mock_pipeline.uploader = mock_uploader
+        mock_pipeline.manifest.get.return_value = {
+            "clip_id": "short_002",
+            "youtube_id": "vid_deleted",
+            "state": "UPLOADED",
+        }
+        mock_uploader.verify_video.return_value = {
+            "verified": False,
+            "reason": "not_found",
+            "video_id": "vid_deleted",
+        }
+        mock_tracker = MagicMock()
+        mock_tracker.max_units = 10000
+        mock_tracker.get_status.return_value = {"units_used": 51}
+        mock_uploader.quota_tracker = mock_tracker
+
+        with patch("app.api.routes.upload.get_shorts_pipeline", return_value=mock_pipeline):
+            resp = self.client.get("/api/upload/short_002/verify")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertFalse(data["verified"])
+            self.assertEqual(data["reason"], "not_found")
+            call_kwargs = mock_pipeline.manifest.update_record.call_args[1]
+            self.assertFalse(call_kwargs["youtube_verified"])
+            self.assertEqual(call_kwargs["youtube_verify_reason"], "not_found")
+
+    def test_reupload_single_short_endpoint(self) -> None:
+        """POST /api/upload/{id}/reupload resets manifest state and uploads again."""
+        mock_pipeline = MagicMock()
+        mock_uploader = MagicMock()
+        mock_pipeline.uploader = mock_uploader
+        mock_pipeline.manifest.get.return_value = {
+            "clip_id": "short_003",
+            "youtube_id": "vid_old_111",
+            "state": "UPLOADED",
+            "privacy_status": "public",
+        }
+        mock_uploader.verify_video.return_value = {
+            "verified": True,
+            "status": "public",
+            "video_id": "vid_old_111",
+        }
+        mock_pipeline.upload_shorts.return_value = {
+            "uploaded": 1,
+            "items": [
+                {
+                    "youtube_id": "vid_new_222",
+                    "youtube_url": "https://youtube.com/shorts/vid_new_222",
+                    "title": "Fresh Title",
+                }
+            ],
+        }
+
+        with patch("app.api.routes.upload.get_shorts_pipeline", return_value=mock_pipeline):
+            with self.assertLogs("app.api.routes.upload", level="WARNING") as cm:
+                resp = self.client.post("/api/upload/short_003/reupload", json={"privacy_status": "unlisted"})
+                self.assertEqual(resp.status_code, 200)
+                data = resp.json()
+                self.assertEqual(data["status"], "uploaded")
+                self.assertEqual(data["short"]["youtube_id"], "vid_new_222")
+                self.assertEqual(data["previous_video_id"], "vid_old_111")
+
+            warning_found = any("Previous upload (video_id: vid_old_111) still exists" in msg for msg in cm.output)
+            self.assertTrue(warning_found, f"Expected warning in logs, got: {cm.output}")
+
+    def test_verify_all_uploads_endpoint(self) -> None:
+        """POST /api/upload/verify-all batches checks for all uploaded shorts."""
+        mock_pipeline = MagicMock()
+        mock_uploader = MagicMock()
+        mock_pipeline.uploader = mock_uploader
+        mock_pipeline.manifest.all_records.return_value = [
+            {"clip_id": "s1", "youtube_id": "vid1", "state": "UPLOADED"},
+            {"clip_id": "s2", "youtube_id": "vid2", "state": "UPLOADED"},
+        ]
+        mock_uploader.verify_videos.return_value = {
+            "units_used": 1,
+            "results": {
+                "vid1": {"verified": True, "status": "public", "video_id": "vid1"},
+                "vid2": {"verified": False, "reason": "not_found", "video_id": "vid2"},
+            },
+        }
+        mock_tracker = MagicMock()
+        mock_tracker.max_units = 10000
+        mock_tracker.get_status.return_value = {"units_used": 52}
+        mock_uploader.quota_tracker = mock_tracker
+
+        with patch("app.api.routes.upload.get_shorts_pipeline", return_value=mock_pipeline):
+            resp = self.client.post("/api/upload/verify-all")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertEqual(data["total_checked"], 2)
+            self.assertEqual(data["verified_count"], 1)
+            self.assertEqual(data["not_found_count"], 1)
+            self.assertEqual(data["quota_units_used"], 1)
+
