@@ -1,928 +1,502 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Save, 
-  CheckCircle2, 
-  AlertCircle, 
-  Sliders, 
-  Tv, 
-  Youtube, 
-  Film, 
-  BrainCircuit, 
-  ShieldCheck,
-  RefreshCw,
+import React, { useState, useEffect } from "react"
+import {
+  Save,
   Lock,
   Unlock,
   Plus,
-  X,
-  Loader2,
-  Globe
-} from 'lucide-react';
-import { resolveChannel } from '../api';
+  Trash2,
+  Youtube,
+  Film,
+  HardDrive,
+  BrainCircuit,
+  Sliders,
+  CheckCircle2,
+  AlertCircle,
+  Globe,
+  RotateCcw,
+} from "lucide-react"
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Slider } from "@/components/ui/slider"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Badge } from "@/components/ui/badge"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
+import { resolveChannel } from "@/api"
+import { toast } from "sonner"
 
 const AVAILABLE_LANGUAGES = [
-  { code: 'en', label: 'English' },
-  { code: 'hi', label: 'Hindi' },
-  { code: 'es', label: 'Spanish' },
-  { code: 'pt', label: 'Portuguese' },
-  { code: 'ja', label: 'Japanese' },
-  { code: 'ko', label: 'Korean' },
-];
+  { code: "en", label: "English" },
+  { code: "hi", label: "Hindi" },
+  { code: "es", label: "Spanish" },
+  { code: "pt", label: "Portuguese" },
+  { code: "ja", label: "Japanese" },
+  { code: "ko", label: "Korean" },
+]
 
-export default function Settings({ settings = {}, onSave, isSaving }) {
-  // Card Lock States (All locked by default)
-  const [unlockedCards, setUnlockedCards] = useState({
-    platform: false,
-    twitch: false,
-    youtube: false,
-    multistream: false,
-    shorts: false,
-    youtube_pub: false,
-    gemini: false,
-  });
+export default function SettingsPage({ settings = {}, onSave, isSaving }) {
+  // Lock state: settings cards locked by default to prevent accidental edits
+  const [isUnlocked, setIsUnlocked] = useState(false)
 
   const [formData, setFormData] = useState({
-    platform: 'twitch',
     multi_stream_enabled: false,
-    max_streams: 2,
+    max_concurrent_streams: 2,
     recording_enabled: true,
-    recording_quality: '1080p60,1080p,720p60,best',
-    shorts_engine: 'openshorts',
-    subtitle_style: 'none',
-    reframe_mode: 'wide',
-    youtube_privacy_status: 'public',
-    youtube_min_score: 78,
+    recording_quality: "1080p60,1080p,720p60,best",
+    shorts_engine: "openshorts",
+    openshorts_subtitle_style: "bold",
+    openshorts_reframe_mode: "split",
+    hook_overlay_enabled: false,
+    youtube_privacy_status: "public",
+    youtube_min_score: 75,
     youtube_daily_limit: 5,
     youtube_auto_upload: false,
     viral_metadata_enabled: true,
-    gemini_model: 'gemini-3.1-flash-lite',
-    gemini_api_key: '',
-  });
+    gemini_model: "gemini-3.1-flash-lite",
+    gemini_api_key: "",
+    import_max_clips: 5,
+    import_clip_duration: 55,
+  })
 
-  // Dynamic Channel Rows
-  // YouTube: [{ id: 'UC...', name: 'IShowSpeed', active: true, resolving: false }]
-  const [ytChannels, setYtChannels] = useState([]);
-  // Twitch: [{ name: 'kaicenat', active: true }]
-  const [twitchChannels, setTwitchChannels] = useState([]);
-  // Language checkboxes: ['en', 'hi']
-  const [selectedLanguages, setSelectedLanguages] = useState(['en', 'hi']);
+  // Dynamic YouTube Channels rows: [{ id: 'UC...', name: 'CarryMinati', active: true }]
+  const [ytChannels, setYtChannels] = useState([])
+  const [selectedLanguages, setSelectedLanguages] = useState(["en", "hi"])
 
-  const [savedSuccess, setSavedSuccess] = useState(false);
-
-  // Initialize state from backend settings
   useEffect(() => {
     if (settings && Object.keys(settings).length > 0) {
-      setFormData(prev => ({
+      setFormData((prev) => ({
         ...prev,
         ...settings,
-        gemini_api_key: '',
-      }));
+        gemini_api_key: "",
+      }))
 
-      // Parse YouTube channels (active + excluded)
-      const activeYt = (settings.target_youtube_channels || '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean);
-      const excludedYt = (settings.excluded_youtube_channels || '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean);
+      // Parse YouTube channels
+      const activeList = settings.target_youtube_channels || []
+      const excludedList = settings.excluded_youtube_channels || []
+      const combined = [
+        ...activeList.map((id) => ({ id, name: id, active: true })),
+        ...excludedList.map((id) => ({ id, name: id, active: false })),
+      ]
+      setYtChannels(combined.length > 0 ? combined : [{ id: "", name: "", active: true }])
 
-      const combinedYt = [
-        ...activeYt.map(id => ({ id, name: '', active: true, resolving: false })),
-        ...excludedYt.map(id => ({ id, name: '', active: false, resolving: false })),
-      ];
-      setYtChannels(combinedYt.length > 0 ? combinedYt : [{ id: '', name: '', active: true, resolving: false }]);
-
-      // Parse Twitch channels (active + excluded)
-      const activeTw = (settings.target_channels || '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean);
-      const excludedTw = (settings.excluded_target_channels || '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean);
-
-      const combinedTw = [
-        ...activeTw.map(name => ({ name, active: true })),
-        ...excludedTw.map(name => ({ name, active: false })),
-      ];
-      setTwitchChannels(combinedTw.length > 0 ? combinedTw : [{ name: '', active: true }]);
-
-      // Parse Languages
-      const langs = (settings.target_languages || 'en,hi')
-        .split(',')
-        .map(s => s.trim().toLowerCase())
-        .filter(Boolean);
-      setSelectedLanguages(langs.length > 0 ? langs : ['en', 'hi']);
+      if (settings.target_languages) {
+        setSelectedLanguages(Array.from(settings.target_languages))
+      }
     }
-  }, [settings]);
+  }, [settings])
 
-  // Resolve YouTube channel names on mount or when new IDs appear without names
+  // Resolve channel names asynchronously
   useEffect(() => {
-    ytChannels.forEach((item, index) => {
-      if (item.id && item.id.trim() && !item.name && !item.resolving) {
-        handleResolveYt(index, item.id);
+    ytChannels.forEach((item, idx) => {
+      if (item.id && item.id.startsWith("UC") && item.name === item.id) {
+        resolveChannel(item.id).then((res) => {
+          if (res && res.name && res.name !== item.id) {
+            setYtChannels((prev) =>
+              prev.map((c, i) => (i === idx ? { ...c, name: res.name } : c))
+            )
+          }
+        })
       }
-    });
-  }, [ytChannels.map(c => c.id).join(',')]);
+    })
+  }, [ytChannels])
 
-  const toggleLock = (cardKey) => {
-    setUnlockedCards(prev => ({
-      ...prev,
-      [cardKey]: !prev[cardKey],
-    }));
-  };
+  const handleAddChannel = () => {
+    setYtChannels((prev) => [...prev, { id: "", name: "", active: true }])
+  }
 
-  const isAnyCardUnlocked = Object.values(unlockedCards).some(Boolean);
+  const handleRemoveChannel = (index) => {
+    setYtChannels((prev) => prev.filter((_, idx) => idx !== index))
+  }
 
-  const handleChange = (e) => {
-    const { name, value, type, checked } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value,
-    }));
-    setSavedSuccess(false);
-  };
+  const handleChannelIdChange = (index, val) => {
+    setYtChannels((prev) =>
+      prev.map((item, idx) => (idx === index ? { ...item, id: val, name: val } : item))
+    )
+  }
 
-  // --- YouTube Channel Row Helpers ---
-  const handleResolveYt = async (index, channelId) => {
-    const cleanId = (channelId || '').trim();
-    if (!cleanId) return;
+  const handleChannelToggleActive = (index) => {
+    setYtChannels((prev) =>
+      prev.map((item, idx) => (idx === index ? { ...item, active: !item.active } : item))
+    )
+  }
 
-    setYtChannels(prev => prev.map((item, idx) => idx === index ? { ...item, resolving: true } : item));
+  const handleSave = async (e) => {
+    if (e) e.preventDefault()
 
-    try {
-      const res = await resolveChannel(cleanId);
-      setYtChannels(prev => prev.map((item, idx) => {
-        if (idx === index) {
-          return {
-            ...item,
-            name: res && res.name ? res.name : cleanId,
-            resolving: false,
-          };
-        }
-        return item;
-      }));
-    } catch {
-      setYtChannels(prev => prev.map((item, idx) => idx === index ? { ...item, resolving: false } : item));
-    }
-  };
-
-  const handleYtIdChange = (index, val) => {
-    setYtChannels(prev => prev.map((item, idx) => {
-      if (idx === index) {
-        return { ...item, id: val, name: '' };
-      }
-      return item;
-    }));
-    setSavedSuccess(false);
-  };
-
-  const handleYtActiveToggle = (index) => {
-    setYtChannels(prev => prev.map((item, idx) => {
-      if (idx === index) {
-        return { ...item, active: !item.active };
-      }
-      return item;
-    }));
-    setSavedSuccess(false);
-  };
-
-  const addYtChannel = () => {
-    setYtChannels(prev => [...prev, { id: '', name: '', active: true, resolving: false }]);
-  };
-
-  const removeYtChannel = (index) => {
-    setYtChannels(prev => prev.filter((_, idx) => idx !== index));
-    setSavedSuccess(false);
-  };
-
-  // --- Twitch Channel Row Helpers ---
-  const handleTwitchNameChange = (index, val) => {
-    setTwitchChannels(prev => prev.map((item, idx) => {
-      if (idx === index) {
-        return { ...item, name: val };
-      }
-      return item;
-    }));
-    setSavedSuccess(false);
-  };
-
-  const handleTwitchActiveToggle = (index) => {
-    setTwitchChannels(prev => prev.map((item, idx) => {
-      if (idx === index) {
-        return { ...item, active: !item.active };
-      }
-      return item;
-    }));
-    setSavedSuccess(false);
-  };
-
-  const addTwitchChannel = () => {
-    setTwitchChannels(prev => [...prev, { name: '', active: true }]);
-  };
-
-  const removeTwitchChannel = (index) => {
-    setTwitchChannels(prev => prev.filter((_, idx) => idx !== index));
-    setSavedSuccess(false);
-  };
-
-  // --- Language Checkbox Helpers ---
-  const toggleLanguage = (code) => {
-    setSelectedLanguages(prev => {
-      if (prev.includes(code)) {
-        if (prev.length === 1) return prev; // Keep at least one language
-        return prev.filter(c => c !== code);
-      } else {
-        return [...prev, code];
-      }
-    });
-    setSavedSuccess(false);
-  };
-
-  // --- Submit Handler ---
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-
-    const activeYtIds = ytChannels
-      .filter(c => c.active && c.id && c.id.trim())
-      .map(c => c.id.trim());
-    const excludedYtIds = ytChannels
-      .filter(c => !c.active && c.id && c.id.trim())
-      .map(c => c.id.trim());
-
-    const activeTwitchNames = twitchChannels
-      .filter(c => c.active && c.name && c.name.trim())
-      .map(c => c.name.trim().toLowerCase());
-    const excludedTwitchNames = twitchChannels
-      .filter(c => !c.active && c.name && c.name.trim())
-      .map(c => c.name.trim().toLowerCase());
+    const activeYt = ytChannels.filter((c) => c.active && c.id.trim()).map((c) => c.id.trim())
+    const excludedYt = ytChannels.filter((c) => !c.active && c.id.trim()).map((c) => c.id.trim())
 
     const payload = {
       ...formData,
-      target_youtube_channels: activeYtIds.join(','),
-      excluded_youtube_channels: excludedYtIds.join(','),
-      target_channels: activeTwitchNames.join(','),
-      excluded_target_channels: excludedTwitchNames.join(','),
-      target_languages: selectedLanguages.join(','),
-    };
-
-    if (!payload.gemini_api_key) {
-      delete payload.gemini_api_key;
+      monitor_platform: "youtube",
+      target_youtube_channels: activeYt.join(","),
+      excluded_youtube_channels: excludedYt.join(","),
+      target_languages: selectedLanguages.join(","),
     }
 
-    await onSave(payload);
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
-  };
+    try {
+      await onSave(payload)
+      toast.success("Settings successfully updated!")
+    } catch (err) {
+      toast.error(err.message || "Failed to save settings.")
+    }
+  }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6 max-w-5xl mx-auto pb-12">
-      {/* Header & Save Action */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#121722] border border-[#1f293d] rounded-2xl p-6">
+    <div className="space-y-6">
+      {/* Top Header with Lock & Save */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-white flex items-center space-x-2">
-            <Sliders className="w-5 h-5 text-blue-400" />
-            <span>Pipeline Configuration</span>
+          <h2 className="text-xl font-bold tracking-tight text-white flex items-center space-x-2">
+            <span>System Configuration</span>
           </h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Edit settings cards by unlocking them. Changes persist directly into your local <code>backend/.env</code> file.
+          <p className="text-xs text-slate-400">
+            Tune target YouTube channels, recording pipeline, video reframing, and AI models.
           </p>
         </div>
 
-        {isAnyCardUnlocked ? (
-          <button
-            type="submit"
-            disabled={isSaving}
-            className="flex items-center space-x-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold rounded-xl text-sm transition-all shadow-lg shadow-blue-500/20"
-          >
-            {savedSuccess ? (
-              <>
-                <CheckCircle2 className="w-4 h-4 text-white" />
-                <span>Settings Saved!</span>
-              </>
+        <div className="flex items-center space-x-3">
+          {/* Lock / Unlock Toggle */}
+          <div className="flex items-center space-x-2 bg-[#121826] border border-[#1f293d] px-3 py-1.5 rounded-lg text-xs">
+            {isUnlocked ? (
+              <Unlock className="w-3.5 h-3.5 text-amber-400" />
             ) : (
-              <>
-                <Save className="w-4 h-4" />
-                <span>{isSaving ? 'Saving...' : 'Save Settings'}</span>
-              </>
+              <Lock className="w-3.5 h-3.5 text-slate-400" />
             )}
-          </button>
-        ) : (
-          <div className="flex items-center space-x-2 text-xs text-slate-400 bg-[#182030] px-4 py-2.5 rounded-xl border border-[#24334f]">
-            <Lock className="w-4 h-4 text-slate-400" />
-            <span>Unlock any card to enable saving</span>
+            <span className="text-slate-300 font-medium">
+              {isUnlocked ? "Unlocked" : "Locked"}
+            </span>
+            <Switch checked={isUnlocked} onCheckedChange={setIsUnlocked} />
           </div>
-        )}
+
+          <Button
+            onClick={handleSave}
+            disabled={isSaving || !isUnlocked}
+            className="h-9 px-5 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs flex items-center space-x-1.5 shadow"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>{isSaving ? "Saving..." : "Save Changes"}</span>
+          </Button>
+        </div>
       </div>
 
-      {/* Grid of Settings Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* Settings Navigation Tabs */}
+      <Tabs defaultValue="channels" className="space-y-4">
+        <TabsList className="bg-[#0f1422] border border-[#1f293d] p-1 flex flex-wrap justify-start h-auto gap-1">
+          <TabsTrigger value="channels" className="text-xs">
+            <Youtube className="w-3.5 h-3.5 mr-1.5 text-red-500" />
+            <span>Channels</span>
+          </TabsTrigger>
+          <TabsTrigger value="recording" className="text-xs">
+            <HardDrive className="w-3.5 h-3.5 mr-1.5 text-cyan-400" />
+            <span>Recording</span>
+          </TabsTrigger>
+          <TabsTrigger value="processing" className="text-xs">
+            <Film className="w-3.5 h-3.5 mr-1.5 text-purple-400" />
+            <span>Shorts & Subtitles</span>
+          </TabsTrigger>
+          <TabsTrigger value="youtube" className="text-xs">
+            <Youtube className="w-3.5 h-3.5 mr-1.5 text-red-400" />
+            <span>YouTube Upload</span>
+          </TabsTrigger>
+          <TabsTrigger value="advanced" className="text-xs">
+            <BrainCircuit className="w-3.5 h-3.5 mr-1.5 text-indigo-400" />
+            <span>AI & Advanced</span>
+          </TabsTrigger>
+        </TabsList>
 
-        {/* 1. Monitoring Platform & Language Filter */}
-        <div className="bg-[#121722] border border-[#1f293d] rounded-2xl p-6 space-y-4">
-          <div className="flex items-center justify-between border-b border-[#1f293d] pb-3">
-            <div className="flex items-center space-x-2 text-white font-bold">
-              <Globe className="w-4 h-4 text-purple-400" />
-              <span>Platform & Language Settings</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => toggleLock('platform')}
-              className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
-                unlockedCards.platform
-                  ? 'text-emerald-400 bg-emerald-950/40 border border-emerald-500/40'
-                  : 'text-slate-400 hover:text-slate-200 bg-[#182030] border border-[#24334f]'
-              }`}
-              title={unlockedCards.platform ? "Lock card" : "Unlock card to edit"}
-            >
-              {unlockedCards.platform ? (
-                <>
-                  <Unlock className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Unlocked</span>
-                </>
-              ) : (
-                <>
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Locked</span>
-                </>
-              )}
-            </button>
-          </div>
-
-          <div className={`space-y-4 text-xs transition-opacity ${unlockedCards.platform ? '' : 'opacity-60 pointer-events-none select-none'}`}>
-            <div>
-              <label className="block text-slate-400 font-semibold mb-1">Monitoring Platform Mode</label>
-              <select
-                name="platform"
-                disabled={!unlockedCards.platform}
-                value={formData.platform}
-                onChange={handleChange}
-                className="w-full bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-              >
-                <option value="twitch">Twitch Only</option>
-                <option value="youtube">YouTube Live Only</option>
-                <option value="all">Both (Twitch & YouTube)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-slate-400 font-semibold mb-2">Target Stream Languages</label>
-              <div className="grid grid-cols-2 gap-2">
-                {AVAILABLE_LANGUAGES.map(lang => {
-                  const isChecked = selectedLanguages.includes(lang.code);
-                  return (
-                    <label
-                      key={lang.code}
-                      className={`flex items-center space-x-2.5 p-2 rounded-lg border transition-all cursor-pointer ${
-                        isChecked
-                          ? 'bg-blue-950/30 border-blue-500/40 text-blue-200'
-                          : 'bg-[#182030] border-[#24334f] text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        disabled={!unlockedCards.platform}
-                        checked={isChecked}
-                        onChange={() => toggleLanguage(lang.code)}
-                        className="w-4 h-4 accent-blue-600 rounded cursor-pointer"
-                      />
-                      <span className="font-medium text-xs text-white">{lang.label}</span>
-                      <span className="text-[10px] text-slate-500 font-mono ml-auto">({lang.code})</span>
-                    </label>
-                  );
-                })}
+        {/* Tab 1: Channels */}
+        <TabsContent value="channels">
+          <Card className="border-[#1f293d] bg-[#121826]/80">
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base text-white">Target YouTube Channels</CardTitle>
+                  <CardDescription className="text-xs text-slate-400">
+                    Live streams from these channel IDs will be monitored for chat spikes and highlights.
+                  </CardDescription>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleAddChannel}
+                  disabled={!isUnlocked}
+                  className="h-8 text-xs border-[#1f293d] hover:bg-[#1f293d]"
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1" />
+                  <span>Add Channel</span>
+                </Button>
               </div>
-            </div>
-          </div>
-        </div>
-
-        {/* 2. YouTube Target Channels */}
-        <div className="bg-[#121722] border border-[#1f293d] rounded-2xl p-6 space-y-4">
-          <div className="flex items-center justify-between border-b border-[#1f293d] pb-3">
-            <div className="flex items-center space-x-2 text-white font-bold">
-              <Youtube className="w-4 h-4 text-red-500" />
-              <span>YouTube Live Channels</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => toggleLock('youtube')}
-              className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
-                unlockedCards.youtube
-                  ? 'text-emerald-400 bg-emerald-950/40 border border-emerald-500/40'
-                  : 'text-slate-400 hover:text-slate-200 bg-[#182030] border border-[#24334f]'
-              }`}
-              title={unlockedCards.youtube ? "Lock card" : "Unlock card to edit"}
-            >
-              {unlockedCards.youtube ? (
-                <>
-                  <Unlock className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Unlocked</span>
-                </>
-              ) : (
-                <>
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Locked</span>
-                </>
-              )}
-            </button>
-          </div>
-
-          <div className={`space-y-3 text-xs transition-opacity ${unlockedCards.youtube ? '' : 'opacity-60 pointer-events-none select-none'}`}>
-            <div className="flex items-center justify-between text-slate-400 text-[11px] pb-1 border-b border-[#1f293d]/50">
-              <span>Active</span>
-              <span className="flex-1 ml-4">Channel ID & Resolved Name</span>
-              <span>Remove</span>
-            </div>
-
-            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-              {ytChannels.map((ch, idx) => (
-                <div key={idx} className="flex items-center space-x-2 bg-[#182030] p-2 rounded-xl border border-[#24334f]">
-                  <input
-                    type="checkbox"
-                    disabled={!unlockedCards.youtube}
-                    checked={ch.active}
-                    onChange={() => handleYtActiveToggle(idx)}
-                    title={ch.active ? "Monitored (Active)" : "Excluded from monitoring"}
-                    className="w-4 h-4 accent-red-600 rounded cursor-pointer shrink-0"
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {ytChannels.map((item, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center space-x-2 p-2 rounded-lg bg-[#0d131f] border border-[#1f293d]"
+                >
+                  <Checkbox
+                    checked={item.active}
+                    disabled={!isUnlocked}
+                    onCheckedChange={() => handleChannelToggleActive(idx)}
                   />
-                  <div className="flex-1 min-w-0">
-                    <input
-                      type="text"
-                      disabled={!unlockedCards.youtube}
-                      value={ch.id}
-                      onChange={(e) => handleYtIdChange(idx, e.target.value)}
-                      onBlur={() => handleResolveYt(idx, ch.id)}
-                      placeholder="UCWsDFcIhY2DBi3GB5uykGXA"
-                      className="w-full bg-[#121722] text-slate-200 border border-[#1f293d] rounded-lg px-2.5 py-1 font-mono text-xs focus:outline-none focus:border-red-500"
-                    />
-                    <div className="flex items-center mt-1 space-x-1">
-                      {ch.resolving ? (
-                        <div className="flex items-center space-x-1 text-[11px] text-blue-400">
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                          <span>Resolving name...</span>
-                        </div>
-                      ) : ch.name ? (
-                        <span className="text-[11px] font-semibold text-emerald-400">
-                          {ch.name}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-slate-500">Unresolved channel</span>
-                      )}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={!unlockedCards.youtube}
-                    onClick={() => removeYtChannel(idx)}
-                    className="text-red-400 hover:text-red-300 p-1.5 rounded-lg hover:bg-red-950/30 shrink-0"
-                    title="Remove channel"
+                  <Input
+                    placeholder="Channel ID (e.g. UC7cs8q-gJRlGwj4A8OmCmXg)"
+                    value={item.id}
+                    disabled={!isUnlocked}
+                    onChange={(e) => handleChannelIdChange(idx, e.target.value)}
+                    className="h-8 text-xs font-mono border-none bg-transparent"
+                  />
+                  {item.name && item.name !== item.id && (
+                    <Badge variant="secondary" className="text-[11px] shrink-0 font-medium">
+                      {item.name}
+                    </Badge>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => handleRemoveChannel(idx)}
+                    disabled={!isUnlocked}
+                    className="h-7 w-7 text-slate-400 hover:text-red-400 shrink-0"
                   >
-                    <X className="w-4 h-4" />
-                  </button>
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
                 </div>
               ))}
-            </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-            <button
-              type="button"
-              disabled={!unlockedCards.youtube}
-              onClick={addYtChannel}
-              className="flex items-center space-x-1.5 text-xs text-red-400 hover:text-red-300 font-semibold px-3 py-1.5 rounded-lg border border-red-500/20 hover:border-red-500/40 bg-red-500/10 transition-colors"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Add YouTube Channel</span>
-            </button>
-          </div>
-        </div>
-
-        {/* 3. Twitch Target Channels */}
-        <div className="bg-[#121722] border border-[#1f293d] rounded-2xl p-6 space-y-4">
-          <div className="flex items-center justify-between border-b border-[#1f293d] pb-3">
-            <div className="flex items-center space-x-2 text-white font-bold">
-              <Tv className="w-4 h-4 text-purple-400" />
-              <span>Twitch Streamers</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => toggleLock('twitch')}
-              className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
-                unlockedCards.twitch
-                  ? 'text-emerald-400 bg-emerald-950/40 border border-emerald-500/40'
-                  : 'text-slate-400 hover:text-slate-200 bg-[#182030] border border-[#24334f]'
-              }`}
-              title={unlockedCards.twitch ? "Lock card" : "Unlock card to edit"}
-            >
-              {unlockedCards.twitch ? (
-                <>
-                  <Unlock className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Unlocked</span>
-                </>
-              ) : (
-                <>
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Locked</span>
-                </>
-              )}
-            </button>
-          </div>
-
-          <div className={`space-y-3 text-xs transition-opacity ${unlockedCards.twitch ? '' : 'opacity-60 pointer-events-none select-none'}`}>
-            <div className="flex items-center justify-between text-slate-400 text-[11px] pb-1 border-b border-[#1f293d]/50">
-              <span>Active</span>
-              <span className="flex-1 ml-4">Channel Username</span>
-              <span>Remove</span>
-            </div>
-
-            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-              {twitchChannels.map((ch, idx) => (
-                <div key={idx} className="flex items-center space-x-2 bg-[#182030] p-2 rounded-xl border border-[#24334f]">
-                  <input
-                    type="checkbox"
-                    disabled={!unlockedCards.twitch}
-                    checked={ch.active}
-                    onChange={() => handleTwitchActiveToggle(idx)}
-                    title={ch.active ? "Monitored (Active)" : "Excluded from monitoring"}
-                    className="w-4 h-4 accent-purple-600 rounded cursor-pointer shrink-0"
+        {/* Tab 2: Recording */}
+        <TabsContent value="recording">
+          <Card className="border-[#1f293d] bg-[#121826]/80">
+            <CardHeader>
+              <CardTitle className="text-base text-white">Capture & Video Buffer</CardTitle>
+              <CardDescription className="text-xs text-slate-400">
+                Configure streamlink quality, maximum rolling memory, and segment durations.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <span className="text-xs font-medium text-slate-300">Recording Quality Hierarchy</span>
+                  <Input
+                    value={formData.recording_quality || "1080p60,1080p,720p60,best"}
+                    disabled={!isUnlocked}
+                    onChange={(e) => setFormData({ ...formData, recording_quality: e.target.value })}
+                    className="h-9 text-xs"
                   />
-                  <input
-                    type="text"
-                    disabled={!unlockedCards.twitch}
-                    value={ch.name}
-                    onChange={(e) => handleTwitchNameChange(idx, e.target.value)}
-                    placeholder="e.g. kaicenat, xqc, shroud"
-                    className="flex-1 bg-[#121722] text-slate-200 border border-[#1f293d] rounded-lg px-2.5 py-1 font-mono text-xs focus:outline-none focus:border-purple-500"
-                  />
-                  <button
-                    type="button"
-                    disabled={!unlockedCards.twitch}
-                    onClick={() => removeTwitchChannel(idx)}
-                    className="text-red-400 hover:text-red-300 p-1.5 rounded-lg hover:bg-red-950/30 shrink-0"
-                    title="Remove channel"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+                  <p className="text-[11px] text-slate-500">Comma-separated streamlink stream selectors.</p>
                 </div>
-              ))}
-            </div>
 
-            <button
-              type="button"
-              disabled={!unlockedCards.twitch}
-              onClick={addTwitchChannel}
-              className="flex items-center space-x-1.5 text-xs text-purple-400 hover:text-purple-300 font-semibold px-3 py-1.5 rounded-lg border border-purple-500/20 hover:border-purple-500/40 bg-purple-500/10 transition-colors"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Add Twitch Channel</span>
-            </button>
-          </div>
-        </div>
-
-        {/* 4. Multi-Stream & Recording Quality */}
-        <div className="bg-[#121722] border border-[#1f293d] rounded-2xl p-6 space-y-4">
-          <div className="flex items-center justify-between border-b border-[#1f293d] pb-3">
-            <div className="flex items-center space-x-2 text-white font-bold">
-              <Sliders className="w-4 h-4 text-blue-400" />
-              <span>Multi-Stream & Capture Quality</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => toggleLock('multistream')}
-              className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
-                unlockedCards.multistream
-                  ? 'text-emerald-400 bg-emerald-950/40 border border-emerald-500/40'
-                  : 'text-slate-400 hover:text-slate-200 bg-[#182030] border border-[#24334f]'
-              }`}
-              title={unlockedCards.multistream ? "Lock card" : "Unlock card to edit"}
-            >
-              {unlockedCards.multistream ? (
-                <>
-                  <Unlock className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Unlocked</span>
-                </>
-              ) : (
-                <>
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Locked</span>
-                </>
-              )}
-            </button>
-          </div>
-
-          <div className={`space-y-4 text-xs transition-opacity ${unlockedCards.multistream ? '' : 'opacity-60 pointer-events-none select-none'}`}>
-            <div className="flex items-center justify-between p-3 bg-[#182030] rounded-xl border border-[#24334f]">
-              <div>
-                <div className="font-semibold text-slate-200">Multi-Stream Mode</div>
-                <div className="text-[11px] text-slate-400">Record and monitor multiple streams concurrently</div>
+                <div className="space-y-1.5">
+                  <span className="text-xs font-medium text-slate-300">Max Concurrent Streams</span>
+                  <Input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={formData.max_concurrent_streams || 2}
+                    disabled={!isUnlocked}
+                    onChange={(e) =>
+                      setFormData({ ...formData, max_concurrent_streams: parseInt(e.target.value) || 2 })
+                    }
+                    className="h-9 text-xs"
+                  />
+                  <p className="text-[11px] text-slate-500">Max channels recorded at the same time.</p>
+                </div>
               </div>
-              <input
-                type="checkbox"
-                name="multi_stream_enabled"
-                disabled={!unlockedCards.multistream}
-                checked={formData.multi_stream_enabled}
-                onChange={handleChange}
-                className="w-5 h-5 accent-blue-600 rounded cursor-pointer"
-              />
-            </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-            <div className="flex items-center justify-between p-3 bg-[#182030] rounded-xl border border-[#24334f]">
-              <div>
-                <div className="font-semibold text-slate-200">Live Recording (Streamlink)</div>
-                <div className="text-[11px] text-slate-400">Capture rolling TS segments for highlight extraction</div>
+        {/* Tab 3: Processing & Subtitles */}
+        <TabsContent value="processing">
+          <Card className="border-[#1f293d] bg-[#121826]/80">
+            <CardHeader>
+              <CardTitle className="text-base text-white">Shorts Reframing & Subtitles</CardTitle>
+              <CardDescription className="text-xs text-slate-400">
+                Configure vertical video layout (facecam/gameplay split) and Whisper subtitle presets.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Reframe mode */}
+                <div className="space-y-1.5">
+                  <span className="text-xs font-medium text-slate-300">Vertical Reframe Mode</span>
+                  <Select
+                    value={formData.openshorts_reframe_mode || "split"}
+                    disabled={!isUnlocked}
+                    onValueChange={(val) => setFormData({ ...formData, openshorts_reframe_mode: val })}
+                  >
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="split">Split Mode (Facecam Top, Gameplay Bottom)</SelectItem>
+                      <SelectItem value="wide">Wide Mode (Blurred Background / Letterbox)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Subtitle style */}
+                <div className="space-y-1.5">
+                  <span className="text-xs font-medium text-slate-300">Subtitle Style</span>
+                  <Select
+                    value={formData.openshorts_subtitle_style || "bold"}
+                    disabled={!isUnlocked}
+                    onValueChange={(val) => setFormData({ ...formData, openshorts_subtitle_style: val })}
+                  >
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="bold">Bold Karaoke (Word highlighted)</SelectItem>
+                      <SelectItem value="hormozi">Hormozi Social (Impact font)</SelectItem>
+                      <SelectItem value="clean">Clean Minimalist</SelectItem>
+                      <SelectItem value="none">Disabled (No Subtitles)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
-              <input
-                type="checkbox"
-                name="recording_enabled"
-                disabled={!unlockedCards.multistream}
-                checked={formData.recording_enabled}
-                onChange={handleChange}
-                className="w-5 h-5 accent-blue-600 rounded cursor-pointer"
-              />
-            </div>
 
-            <div>
-              <label className="block text-slate-400 font-semibold mb-1">Max Concurrent Streams</label>
-              <input
-                type="number"
-                name="max_streams"
-                disabled={!unlockedCards.multistream}
-                min="1"
-                max="6"
-                value={formData.max_streams}
-                onChange={handleChange}
-                className="w-full bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-              />
-            </div>
-
-            <div>
-              <label className="block text-slate-400 font-semibold mb-1">Recording Quality Streamlink Profile</label>
-              <input
-                type="text"
-                name="recording_quality"
-                disabled={!unlockedCards.multistream}
-                value={formData.recording_quality}
-                onChange={handleChange}
-                className="w-full bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-2 font-mono text-xs focus:outline-none focus:border-blue-500"
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* 5. Shorts Video Processing Pipeline */}
-        <div className="bg-[#121722] border border-[#1f293d] rounded-2xl p-6 space-y-4">
-          <div className="flex items-center justify-between border-b border-[#1f293d] pb-3">
-            <div className="flex items-center space-x-2 text-white font-bold">
-              <Film className="w-4 h-4 text-cyan-400" />
-              <span>Vertical 9:16 Shorts Engine</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => toggleLock('shorts')}
-              className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
-                unlockedCards.shorts
-                  ? 'text-emerald-400 bg-emerald-950/40 border border-emerald-500/40'
-                  : 'text-slate-400 hover:text-slate-200 bg-[#182030] border border-[#24334f]'
-              }`}
-              title={unlockedCards.shorts ? "Lock card" : "Unlock card to edit"}
-            >
-              {unlockedCards.shorts ? (
-                <>
-                  <Unlock className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Unlocked</span>
-                </>
-              ) : (
-                <>
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Locked</span>
-                </>
-              )}
-            </button>
-          </div>
-
-          <div className={`space-y-3 text-xs transition-opacity ${unlockedCards.shorts ? '' : 'opacity-60 pointer-events-none select-none'}`}>
-            <div>
-              <label className="block text-slate-400 font-semibold mb-1">Shorts Processing Engine</label>
-              <select
-                name="shorts_engine"
-                disabled={!unlockedCards.shorts}
-                value={formData.shorts_engine}
-                onChange={handleChange}
-                className="w-full bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-              >
-                <option value="openshorts">OpenShorts (Internal Video Pipeline)</option>
-                <option value="auto">Auto (OpenShorts with FFmpeg fallback)</option>
-                <option value="ffmpeg_fallback">FFmpeg Fallback (Lightweight blur-pad)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-slate-400 font-semibold mb-1">Vertical Reframing Mode</label>
-              <select
-                name="reframe_mode"
-                disabled={!unlockedCards.shorts}
-                value={formData.reframe_mode}
-                onChange={handleChange}
-                className="w-full bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-              >
-                <option value="wide">Wide (Cinematic blur-backdrop padding)</option>
-                <option value="split">Split (Top speaker + bottom gameplay)</option>
-                <option value="track">Track (Smooth camera following)</option>
-                <option value="auto">Auto (Detect layout from scene composition)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-slate-400 font-semibold mb-1">Subtitle Styling Preset</label>
-              <select
-                name="subtitle_style"
-                disabled={!unlockedCards.shorts}
-                value={formData.subtitle_style}
-                onChange={handleChange}
-                className="w-full bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-              >
-                <option value="none">None (No subtitles burned)</option>
-                <option value="bold">Bold (Impact font with bright yellow highlight)</option>
-                <option value="pill">Pill (Clean modern rounded box)</option>
-                <option value="hormozi">Hormozi (High-energy animated pop captions)</option>
-                <option value="default">Default (White text with black outline)</option>
-                <option value="clean">Clean (Minimal subtle subtitles)</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {/* 6. YouTube Shorts Publication */}
-        <div className="bg-[#121722] border border-[#1f293d] rounded-2xl p-6 space-y-4">
-          <div className="flex items-center justify-between border-b border-[#1f293d] pb-3">
-            <div className="flex items-center space-x-2 text-white font-bold">
-              <Youtube className="w-4 h-4 text-red-500" />
-              <span>YouTube Shorts Publication</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => toggleLock('youtube_pub')}
-              className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
-                unlockedCards.youtube_pub
-                  ? 'text-emerald-400 bg-emerald-950/40 border border-emerald-500/40'
-                  : 'text-slate-400 hover:text-slate-200 bg-[#182030] border border-[#24334f]'
-              }`}
-              title={unlockedCards.youtube_pub ? "Lock card" : "Unlock card to edit"}
-            >
-              {unlockedCards.youtube_pub ? (
-                <>
-                  <Unlock className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Unlocked</span>
-                </>
-              ) : (
-                <>
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Locked</span>
-                </>
-              )}
-            </button>
-          </div>
-
-          <div className={`space-y-3 text-xs transition-opacity ${unlockedCards.youtube_pub ? '' : 'opacity-60 pointer-events-none select-none'}`}>
-            <div className="flex items-center justify-between p-3 bg-[#182030] rounded-xl border border-[#24334f]">
-              <div>
-                <div className="font-semibold text-slate-200">Auto-Upload Mode</div>
-                <div className="text-[11px] text-slate-400">Automatically upload shorts meeting score criteria</div>
+              {/* Hook title overlay toggle */}
+              <div className="pt-2 flex items-center justify-between border-t border-[#1f293d]">
+                <div className="space-y-0.5">
+                  <span className="text-xs font-medium text-slate-200">Burn Hook Title onto Video</span>
+                  <p className="text-[11px] text-slate-400">
+                    Burn viral hook headline onto the top of the video (Disabled by default for clean video).
+                  </p>
+                </div>
+                <Switch
+                  checked={Boolean(formData.hook_overlay_enabled)}
+                  disabled={!isUnlocked}
+                  onCheckedChange={(val) => setFormData({ ...formData, hook_overlay_enabled: val })}
+                />
               </div>
-              <input
-                type="checkbox"
-                name="youtube_auto_upload"
-                disabled={!unlockedCards.youtube_pub}
-                checked={formData.youtube_auto_upload}
-                onChange={handleChange}
-                className="w-5 h-5 accent-red-600 rounded cursor-pointer"
-              />
-            </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-            <div>
-              <label className="block text-slate-400 font-semibold mb-1">Default Privacy Status</label>
-              <select
-                name="youtube_privacy_status"
-                disabled={!unlockedCards.youtube_pub}
-                value={formData.youtube_privacy_status}
-                onChange={handleChange}
-                className="w-full bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-              >
-                <option value="public">Public (Default - Immediately live)</option>
-                <option value="unlisted">Unlisted (Hidden from search)</option>
-                <option value="private">Private</option>
-              </select>
-            </div>
+        {/* Tab 4: YouTube Upload */}
+        <TabsContent value="youtube">
+          <Card className="border-[#1f293d] bg-[#121826]/80">
+            <CardHeader>
+              <CardTitle className="text-base text-white">YouTube Upload Preferences</CardTitle>
+              <CardDescription className="text-xs text-slate-400">
+                Configure default privacy status and upload thresholds.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <span className="text-xs font-medium text-slate-300">Default Privacy Status</span>
+                  <Select
+                    value={formData.youtube_privacy_status || "public"}
+                    disabled={!isUnlocked}
+                    onValueChange={(val) => setFormData({ ...formData, youtube_privacy_status: val })}
+                  >
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="public">Public (Immediate reach)</SelectItem>
+                      <SelectItem value="unlisted">Unlisted (Private link)</SelectItem>
+                      <SelectItem value="private">Private</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-slate-400 font-semibold mb-1">Min Score for Upload</label>
-                <input
-                  type="number"
-                  name="youtube_min_score"
-                  disabled={!unlockedCards.youtube_pub}
-                  min="0"
-                  max="100"
-                  value={formData.youtube_min_score}
-                  onChange={handleChange}
-                  className="w-full bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+                <div className="space-y-1.5">
+                  <span className="text-xs font-medium text-slate-300">Daily Upload Quota Limit</span>
+                  <Input
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={formData.youtube_daily_limit || 5}
+                    disabled={!isUnlocked}
+                    onChange={(e) =>
+                      setFormData({ ...formData, youtube_daily_limit: parseInt(e.target.value) || 5 })
+                    }
+                    className="h-9 text-xs"
+                  />
+                  <p className="text-[11px] text-slate-500">Max uploads before protecting quota.</p>
+                </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-between border-t border-[#1f293d]">
+                <div className="space-y-0.5">
+                  <span className="text-xs font-medium text-slate-200">Auto-Upload Approved Shorts</span>
+                  <p className="text-[11px] text-slate-400">
+                    Automatically upload newly rendered Shorts if viral score is above 75.
+                  </p>
+                </div>
+                <Switch
+                  checked={Boolean(formData.youtube_auto_upload)}
+                  disabled={!isUnlocked}
+                  onCheckedChange={(val) => setFormData({ ...formData, youtube_auto_upload: val })}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Tab 5: Advanced & AI */}
+        <TabsContent value="advanced">
+          <Card className="border-[#1f293d] bg-[#121826]/80">
+            <CardHeader>
+              <CardTitle className="text-base text-white">AI Highlight & Language Filter</CardTitle>
+              <CardDescription className="text-xs text-slate-400">
+                Configure Gemini models and language preferences.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="space-y-1.5">
+                <span className="text-xs font-medium text-slate-300">Gemini Highlight Model</span>
+                <Input
+                  value={formData.gemini_model || "gemini-3.1-flash-lite"}
+                  disabled={!isUnlocked}
+                  onChange={(e) => setFormData({ ...formData, gemini_model: e.target.value })}
+                  className="h-9 text-xs"
                 />
               </div>
 
-              <div>
-                <label className="block text-slate-400 font-semibold mb-1">Daily Upload Limit</label>
-                <input
-                  type="number"
-                  name="youtube_daily_limit"
-                  disabled={!unlockedCards.youtube_pub}
-                  min="1"
-                  max="10"
-                  value={formData.youtube_daily_limit}
-                  onChange={handleChange}
-                  className="w-full bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-                />
+              {/* Languages */}
+              <div className="space-y-2 pt-2 border-t border-[#1f293d]">
+                <span className="text-xs font-medium text-slate-300 flex items-center space-x-1.5">
+                  <Globe className="w-3.5 h-3.5 text-blue-400" />
+                  <span>Target Stream Languages</span>
+                </span>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1">
+                  {AVAILABLE_LANGUAGES.map((lang) => {
+                    const isChecked = selectedLanguages.includes(lang.code)
+                    return (
+                      <label
+                        key={lang.code}
+                        className="flex items-center space-x-2 text-xs text-slate-300 cursor-pointer p-2 rounded-lg bg-[#0d131f] border border-[#1f293d]"
+                      >
+                        <Checkbox
+                          checked={isChecked}
+                          disabled={!isUnlocked}
+                          onCheckedChange={(chk) => {
+                            if (chk) {
+                              setSelectedLanguages([...selectedLanguages, lang.code])
+                            } else {
+                              setSelectedLanguages(selectedLanguages.filter((c) => c !== lang.code))
+                            }
+                          }}
+                        />
+                        <span>{lang.label} ({lang.code})</span>
+                      </label>
+                    )
+                  })}
+                </div>
               </div>
-            </div>
-          </div>
-        </div>
-
-        {/* 7. AI & Gemini Highlight Analysis */}
-        <div className="bg-[#121722] border border-[#1f293d] rounded-2xl p-6 space-y-4 md:col-span-2">
-          <div className="flex items-center justify-between border-b border-[#1f293d] pb-3">
-            <div className="flex items-center space-x-2 text-white font-bold">
-              <BrainCircuit className="w-4 h-4 text-indigo-400" />
-              <span>Gemini AI Highlight Detection & Metadata</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => toggleLock('gemini')}
-              className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
-                unlockedCards.gemini
-                  ? 'text-emerald-400 bg-emerald-950/40 border border-emerald-500/40'
-                  : 'text-slate-400 hover:text-slate-200 bg-[#182030] border border-[#24334f]'
-              }`}
-              title={unlockedCards.gemini ? "Lock card" : "Unlock card to edit"}
-            >
-              {unlockedCards.gemini ? (
-                <>
-                  <Unlock className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Unlocked</span>
-                </>
-              ) : (
-                <>
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Locked</span>
-                </>
-              )}
-            </button>
-          </div>
-
-          <div className={`grid grid-cols-1 md:grid-cols-2 gap-4 text-xs transition-opacity ${unlockedCards.gemini ? '' : 'opacity-60 pointer-events-none select-none'}`}>
-            <div>
-              <label className="block text-slate-400 font-semibold mb-1">Gemini Model</label>
-              <input
-                type="text"
-                name="gemini_model"
-                disabled={!unlockedCards.gemini}
-                value={formData.gemini_model}
-                onChange={handleChange}
-                className="w-full bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500 font-mono text-xs"
-              />
-            </div>
-
-            <div className="flex items-center justify-between p-3 bg-[#182030] rounded-xl border border-[#24334f]">
-              <div>
-                <div className="font-semibold text-slate-200">Viral Metadata Generator</div>
-                <div className="text-[11px] text-slate-400">Generate curiosity-gap titles, tags, and description via Gemini</div>
-              </div>
-              <input
-                type="checkbox"
-                name="viral_metadata_enabled"
-                disabled={!unlockedCards.gemini}
-                checked={formData.viral_metadata_enabled}
-                onChange={handleChange}
-                className="w-5 h-5 accent-indigo-600 rounded cursor-pointer"
-              />
-            </div>
-
-            <div className="md:col-span-2">
-              <label className="block text-slate-400 font-semibold mb-1">
-                Gemini API Key (Leave empty to keep existing key)
-              </label>
-              <input
-                type="password"
-                name="gemini_api_key"
-                disabled={!unlockedCards.gemini}
-                value={formData.gemini_api_key}
-                onChange={handleChange}
-                placeholder="AIzaSy... (hidden)"
-                className="w-full bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-2 font-mono text-xs focus:outline-none focus:border-blue-500"
-              />
-            </div>
-          </div>
-        </div>
-
-      </div>
-    </form>
-  );
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
 }

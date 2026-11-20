@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
 from app.api.events import ws_manager
@@ -16,6 +16,8 @@ from app.api.media_stream import range_stream_response
 from app.api.state import get_shorts_pipeline
 from app.config import load_settings
 from app.discovery.youtube_finder import resolve_channel_name
+from app.shorts.pipeline import STATE_DISCOVERED, STATE_FAILED
+from app.shorts.queue_manager import get_processing_queue
 
 log = logging.getLogger(__name__)
 
@@ -196,9 +198,31 @@ def preview_short(clip_id: str, request: Request) -> Any:
     return range_stream_response(short_path, request, media_type="video/mp4")
 
 
+@router.get("/shorts/queue")
+def get_shorts_queue() -> dict[str, Any]:
+    """Return the current clip processing queue status."""
+    queue = get_processing_queue()
+    return queue.get_status()
+
+
+@router.post("/shorts/{clip_id}/cancel")
+def cancel_short_processing(clip_id: str) -> dict[str, Any]:
+    """Cancel a queued short processing task before execution begins."""
+    queue = get_processing_queue()
+    success, msg = queue.cancel(clip_id)
+    if not success:
+        if "already" in msg:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=msg)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=msg)
+    return {"status": "cancelled", "clip_id": clip_id, "message": msg}
+
+
 @router.post("/shorts/process")
-def process_pending_shorts(req: ProcessShortsRequest | None = None) -> dict[str, Any]:
-    """Trigger batch processing of pending discovered clips into 9:16 Shorts."""
+def process_pending_shorts(
+    background_tasks: BackgroundTasks,
+    req: ProcessShortsRequest | None = None,
+) -> dict[str, Any]:
+    """Trigger batch processing of pending discovered clips into 9:16 Shorts via queue."""
     payload = req or ProcessShortsRequest()
     settings = load_settings()
     pipeline = get_shorts_pipeline(settings=settings)
@@ -210,33 +234,77 @@ def process_pending_shorts(req: ProcessShortsRequest | None = None) -> dict[str,
     if payload.subtitle_style:
         pipeline.bridge.subtitle_style = payload.subtitle_style
 
-    ws_manager.broadcast_sync("shorts_processing_started", {"channel": payload.channel})
+    queue = get_processing_queue(settings.max_concurrent_processing)
 
-    def on_batch_progress(cid: str, stage: str, pct: int) -> None:
-        ws_manager.broadcast_sync("processing_progress", {
-            "clip_id": cid,
-            "stage": stage,
-            "percentage": pct,
-        })
+    all_clips = pipeline.scan_clips(channel=payload.channel)
+    candidates: list[dict[str, Any]] = []
+    for c in all_clips:
+        cid = c["clip_id"]
+        st = c.get("state")
+        if payload.force or st in (STATE_DISCOVERED, STATE_FAILED):
+            candidates.append(c)
 
-    try:
-        summary = pipeline.process_pending_shorts(
-            channel=payload.channel,
-            force=payload.force,
-            progress_callback=on_batch_progress,
-        )
-        ws_manager.broadcast_sync("shorts_processing_complete", summary)
-        return summary
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Shorts batch processing failed: {exc}",
-        ) from exc
+    if not candidates:
+        return {
+            "status": "queued",
+            "total": 0,
+            "processing": 0,
+            "queued": 0,
+            "items": [],
+        }
+
+    processing_count = 0
+    queued_count = 0
+    items_info: list[dict[str, Any]] = []
+
+    for item in candidates:
+        cid = item["clip_id"]
+        title = item.get("title") or f"Clip {cid}"
+
+        def make_worker(target_cid=cid, force_flag=payload.force):
+            def worker():
+                def on_progress(p_cid: str, stage: str, pct: int) -> None:
+                    queue.report_progress(p_cid, stage, pct)
+
+                summary = pipeline.process_pending_shorts(
+                    clip_id_or_file=target_cid,
+                    force=force_flag,
+                    progress_callback=on_progress,
+                )
+                if summary.get("processed", 0) == 0:
+                    err_msg = "Processing completed but no Short was produced."
+                    if summary.get("items"):
+                        err_msg = summary["items"][0].get("error", err_msg)
+                    raise RuntimeError(err_msg)
+                return summary
+
+            return worker
+
+        q_item, is_active = queue.enqueue(cid, title, make_worker())
+        if is_active:
+            processing_count += 1
+            background_tasks.add_task(queue.run_item, cid)
+        else:
+            queued_count += 1
+
+        items_info.append(q_item.to_dict())
+
+    return {
+        "status": "queued",
+        "total": len(candidates),
+        "processing": processing_count,
+        "queued": queued_count,
+        "items": items_info,
+    }
 
 
 @router.post("/shorts/{clip_id}/process")
-def process_single_short(clip_id: str, req: ProcessShortsRequest | None = None) -> dict[str, Any]:
-    """Process a single specific clip into a vertical Short."""
+def process_single_short(
+    clip_id: str,
+    background_tasks: BackgroundTasks,
+    req: ProcessShortsRequest | None = None,
+) -> dict[str, Any]:
+    """Process a single specific clip into a vertical Short in background task."""
     payload = req or ProcessShortsRequest()
     settings = load_settings()
     pipeline = get_shorts_pipeline(settings=settings)
@@ -265,37 +333,40 @@ def process_single_short(clip_id: str, req: ProcessShortsRequest | None = None) 
     if not clip_title:
         clip_title = f"Clip {clip_id}"
 
-    ws_manager.broadcast_sync("processing_started", {"clip_id": clip_id, "title": clip_title})
-    ws_manager.broadcast_sync("short_processing_started", {"clip_id": clip_id, "title": clip_title})
+    queue = get_processing_queue(settings.max_concurrent_processing)
 
-    def on_single_progress(cid: str, stage: str, pct: int) -> None:
-        ws_manager.broadcast_sync("processing_progress", {
-            "clip_id": cid,
-            "stage": stage,
-            "percentage": pct,
-        })
+    def do_work():
+        def on_single_progress(cid: str, stage: str, pct: int) -> None:
+            queue.report_progress(cid, stage, pct)
 
-    try:
         summary = pipeline.process_pending_shorts(
             clip_id_or_file=clip_id,
             force=True,  # Force re-render for single clip
             progress_callback=on_single_progress,
         )
-        if summary.get("processed", 0) > 0:
-            ws_manager.broadcast_sync("processing_complete", {"clip_id": clip_id})
-            ws_manager.broadcast_sync("short_processing_complete", {"clip_id": clip_id, "summary": summary})
-        else:
+        if summary.get("processed", 0) == 0:
             err_msg = "Processing completed but no Short was produced."
             if summary.get("items"):
                 err_msg = summary["items"][0].get("error", err_msg)
-            ws_manager.broadcast_sync("processing_failed", {"clip_id": clip_id, "error": err_msg})
+            raise RuntimeError(err_msg)
         return summary
-    except Exception as exc:
-        ws_manager.broadcast_sync("processing_failed", {"clip_id": clip_id, "error": str(exc)})
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process clip '{clip_id}' into short: {exc}",
-        ) from exc
+
+    item, is_active = queue.enqueue(clip_id, clip_title, do_work)
+
+    if is_active:
+        background_tasks.add_task(queue.run_item, clip_id)
+        return {
+            "status": "processing",
+            "clip_id": clip_id,
+            "title": clip_title,
+        }
+    else:
+        return {
+            "status": "queued",
+            "clip_id": clip_id,
+            "position": item.position,
+            "title": clip_title,
+        }
 
 
 def _find_short_files_by_id(shorts_dir: Path, clip_id: str, record: dict[str, Any] | None) -> list[Path]:

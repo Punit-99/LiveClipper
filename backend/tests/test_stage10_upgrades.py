@@ -428,7 +428,7 @@ class TestMultiPlatformStreamSession(unittest.TestCase):
                 live_chat_id="chat_yt_456",
             )
             self.assertEqual(session.platform, "youtube")
-            self.assertEqual(session.clips_channel_dir, root / "clips" / "youtube" / "UC7cs8q-gJRlGwj4A8OmCmXg")
+            self.assertEqual(session.clips_channel_dir, root / "clips" / "uc7cs8q-gjrlgwj4a8omcmxg")
 
     def test_session_properties_and_clips_channel_dir_for_twitch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -478,7 +478,7 @@ class TestMultiPlatformStreamSession(unittest.TestCase):
             category="clutch",
             platform="youtube",
         )
-        self.assertEqual(mp4_yt.parent, root / "youtube" / "carryminati")
+        self.assertEqual(mp4_yt.parent, root / "carryminati")
 
     def test_extracted_clip_metadata_platform_field(self):
         plan = ClipWindowPlan(
@@ -553,7 +553,7 @@ class TestMultiPlatformCliFlags(unittest.TestCase):
     def test_parser_defaults(self):
         parser = build_parser()
         args = parser.parse_args([])
-        self.assertIsNone(args.platform)
+        self.assertEqual(args.platform, "youtube")
         self.assertEqual(args.yt_channels, "")
         self.assertEqual(args.yt_category, "gaming")
         self.assertIsNone(args.languages)

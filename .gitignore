@@ -44,6 +44,10 @@ backend/.buffer/
 /shorts/
 /backend/shorts/
 !backend/app/shorts/
+/imports/
+/backend/imports/
+models/
+backend/models/
 highlights.jsonl
 backend/highlights.jsonl
 scratch/

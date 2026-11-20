@@ -15,8 +15,7 @@ from dataclasses import asdict, dataclass, field
 class ChatMessage:
     """One chat message, as captured for a highlight event.
 
-    `timestamp` is wall-clock epoch seconds (Twitch's tmi-sent-ts when available,
-    else local receive time)  meaningful for humans and Gemini.
+    `timestamp` is wall-clock epoch seconds — meaningful for humans and Gemini.
     """
 
     username: str
@@ -69,6 +68,7 @@ class HighlightEvent:
     activity_score: float
     detection_signals: DetectionSignals
     merged_count: int = 0           # how many later spikes merged into this event
+    audio_energy: dict | None = None  # loudness and volume spikes from stream buffer
 
     def to_dict(self) -> dict:
         return {
@@ -85,6 +85,7 @@ class HighlightEvent:
             "activity_score": self.activity_score,
             "detection_signals": self.detection_signals.to_dict(),
             "merged_count": self.merged_count,
+            "audio_energy": self.audio_energy,
         }
 
     def to_json(self, *, indent: int | None = None) -> str:

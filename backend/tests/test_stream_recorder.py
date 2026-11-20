@@ -63,24 +63,22 @@ class _FakeProcess:
 class TestStreamRecorderCommandsAndDiscovery(unittest.TestCase):
     def test_streamlink_command_builder_respects_low_latency_and_omits_disable_ads(self):
         cfg_ll = RecordingConfig(quality="720p60,best", low_latency=True)
-        cmd_ll = build_streamlink_command("/venv/bin/streamlink", "#KaiCenat", cfg_ll)
+        cmd_ll = build_streamlink_command("/venv/bin/streamlink", "KaiCenat", cfg_ll)
         self.assertEqual(
             cmd_ll,
             [
                 "/venv/bin/streamlink",
-                "--twitch-low-latency",
                 "--stdout",
-                "https://www.twitch.tv/kaicenat",
+                "https://www.youtube.com/@KaiCenat/live",
                 "720p60,best",
             ],
         )
-        self.assertNotIn("--twitch-disable-ads", cmd_ll)
 
         cfg_std = RecordingConfig(quality="best", low_latency=False)
         cmd_std = build_streamlink_command("/venv/bin/streamlink", "xqc", cfg_std)
         self.assertEqual(
             cmd_std,
-            ["/venv/bin/streamlink", "--stdout", "https://www.twitch.tv/xqc", "best"],
+            ["/venv/bin/streamlink", "--stdout", "https://www.youtube.com/@xqc/live", "best"],
         )
 
     def test_streamlink_youtube_channel_name_and_handle_resolution(self):

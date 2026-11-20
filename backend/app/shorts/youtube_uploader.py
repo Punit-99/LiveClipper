@@ -238,6 +238,7 @@ class YouTubeUploader:
         sidecar_path: Path | str | None = None,
         sidecar_data: dict[str, Any] | None = None,
         privacy_status: str = "public",
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> dict[str, Any]:
         """Upload a video file to YouTube Shorts using the resumable upload protocol."""
         video_file = Path(video_path)
@@ -281,7 +282,9 @@ class YouTubeUploader:
         )
 
         # Step 2: Stream chunks with resumption and retries
-        upload_result = self._stream_chunks(upload_url, video_file, file_size)
+        upload_result = self._stream_chunks(
+            upload_url, video_file, file_size, progress_callback=progress_callback
+        )
 
         # Step 3: Record successful upload against quota
         if self.quota_tracker:
@@ -434,9 +437,15 @@ class YouTubeUploader:
         upload_url: str,
         video_file: Path,
         file_size: int,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> dict[str, Any]:
         """Stream video bytes in chunks to the resumable upload URL with resumption support."""
         start_byte = 0
+        if progress_callback:
+            try:
+                progress_callback(0, file_size)
+            except Exception as e:
+                log.warning("Progress callback failed at start: %s", e)
 
         with open(video_file, "rb") as fh:
             while start_byte < file_size:
@@ -478,6 +487,11 @@ class YouTubeUploader:
                                 upload_url, file_size
                             )
                             if completed_body:
+                                if progress_callback:
+                                    try:
+                                        progress_callback(file_size, file_size)
+                                    except Exception:
+                                        pass
                                 return completed_body
                             start_byte = resumed_offset
                             chunk_success = True
@@ -488,6 +502,11 @@ class YouTubeUploader:
 
                     # Upload Complete: 200 OK or 201 Created
                     if resp.status_code in (200, 201):
+                        if progress_callback:
+                            try:
+                                progress_callback(file_size, file_size)
+                            except Exception:
+                                pass
                         try:
                             return resp.json()
                         except ValueError as exc:
@@ -503,6 +522,11 @@ class YouTubeUploader:
                             start_byte = last_byte + 1
                         else:
                             start_byte = end_byte + 1
+                        if progress_callback:
+                            try:
+                                progress_callback(min(start_byte, file_size), file_size)
+                            except Exception:
+                                pass
                         chunk_success = True
                         break
 

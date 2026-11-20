@@ -209,8 +209,8 @@ def detect_facecam_box(
             cap.release()
             return None
 
-        sample_fractions = [0.1, 0.25, 0.5, 0.75, 0.9] if sample_count >= 5 else [0.25, 0.5, 0.75]
-        detections: list[tuple[int, int, int, int]] = []
+        sample_fractions = [0.05, 0.15, 0.25, 0.4, 0.55, 0.7, 0.8, 0.9] if sample_count >= 5 else [0.2, 0.5, 0.8]
+        detections: list[tuple[int, int, int, int, int]] = []
 
         for p in sample_fractions:
             frame_idx = int(p * total_frames)
@@ -222,11 +222,15 @@ def detect_facecam_box(
             faces = face_cascade.detectMultiScale(
                 gray,
                 scaleFactor=1.1,
-                minNeighbors=4,
-                minSize=(30, 30),
+                minNeighbors=5,
+                minSize=(35, 35),
             )
             for (x, y, w, h) in faces:
-                detections.append((int(x), int(y), int(w), int(h)))
+                cx, cy = x + w / 2.0, y + h / 2.0
+                # Discard outer margin noise (watermarks, corner logos)
+                if cx < orig_w * 0.04 or cx > orig_w * 0.94 or cy < orig_h * 0.04 or cy > orig_h * 0.94:
+                    continue
+                detections.append((frame_idx, int(x), int(y), int(w), int(h)))
 
         cap.release()
 
@@ -234,39 +238,70 @@ def detect_facecam_box(
             return None
 
         # Cluster detections across sample frames by center distance
-        clusters: list[list[tuple[int, int, int, int]]] = []
+        clusters: list[list[tuple[int, int, int, int, int]]] = []
         for det in detections:
-            cx, cy = det[0] + det[2] / 2.0, det[1] + det[3] / 2.0
+            _, x, y, w, h = det
+            cx, cy = x + w / 2.0, y + h / 2.0
             matched = False
             for cluster in clusters:
-                avg_cx = sum(item[0] + item[2] / 2.0 for item in cluster) / len(cluster)
-                avg_cy = sum(item[1] + item[3] / 2.0 for item in cluster) / len(cluster)
-                if math.hypot(cx - avg_cx, cy - avg_cy) < 80.0:
+                avg_cx = sum(item[1] + item[3] / 2.0 for item in cluster) / len(cluster)
+                avg_cy = sum(item[2] + item[4] / 2.0 for item in cluster) / len(cluster)
+                if math.hypot(cx - avg_cx, cy - avg_cy) < 75.0:
                     cluster.append(det)
                     matched = True
                     break
             if not matched:
                 clusters.append([det])
 
-        # Prioritize clusters detected in multiple frames (stationary streamer facecam)
-        valid_clusters = [c for c in clusters if len(c) >= 2] or clusters
-        if not valid_clusters:
+        if not clusters:
             return None
 
-        # Rank by count descending, then largest average face area
-        best_cluster = max(
-            valid_clusters,
-            key=lambda c: (len(c), sum(item[2] * item[3] for item in c) / len(c)),
-        )
+        def score_cluster(c: list[tuple[int, int, int, int, int]]) -> float:
+            unique_frames = len(set(item[0] for item in c))
+            avg_cx = sum(item[1] + item[3] / 2.0 for item in c) / len(c)
+            avg_cy = sum(item[2] + item[4] / 2.0 for item in c) / len(c)
+            avg_area = sum(item[3] * item[4] for item in c) / len(c)
 
-        avg_x = sum(item[0] for item in best_cluster) / len(best_cluster)
-        avg_y = sum(item[1] for item in best_cluster) / len(best_cluster)
-        avg_w = sum(item[2] for item in best_cluster) / len(best_cluster)
-        avg_h = sum(item[3] for item in best_cluster) / len(best_cluster)
+            # Streamer overlay zone weighting (left-side or corner placement)
+            bonus = 1.0
+            if avg_cx < orig_w * 0.35:
+                bonus = 3.5  # Typical left-side streamer facecam
+            elif avg_cx > orig_w * 0.65 and (avg_cy < orig_h * 0.40 or avg_cy > orig_h * 0.60):
+                bonus = 2.0  # Top/bottom right corner facecam
+
+            # Penalty for extreme right margin where stationary signs/UI live
+            if avg_cx > orig_w * 0.88:
+                bonus *= 0.25
+
+            return (unique_frames * 100.0 * bonus) + (avg_area * 0.01)
+
+        clusters.sort(key=score_cluster, reverse=True)
+        best_cluster = clusters[0]
+
+        # Check for adjacent webcam co-host / multiple faces in the same webcam frame
+        primary_cx = sum(item[1] + item[3] / 2.0 for item in best_cluster) / len(best_cluster)
+        primary_cy = sum(item[2] + item[4] / 2.0 for item in best_cluster) / len(best_cluster)
+        co_hosts = [best_cluster]
+        for other in clusters[1:]:
+            if len(set(item[0] for item in other)) >= 2:
+                ocx = sum(item[1] + item[3] / 2.0 for item in other) / len(other)
+                ocy = sum(item[2] + item[4] / 2.0 for item in other) / len(other)
+                if abs(ocy - primary_cy) < 120.0 and abs(ocx - primary_cx) < 300.0:
+                    co_hosts.append(other)
+
+        all_faces = [d for c in co_hosts for d in c]
+        min_x = min(item[1] for item in all_faces)
+        max_x = max(item[1] + item[3] for item in all_faces)
+        min_y = min(item[2] for item in all_faces)
+        max_y = max(item[2] + item[4] for item in all_faces)
+
+        cx = (min_x + max_x) / 2.0
+        cy = (min_y + max_y) / 2.0
+        avg_h = sum(item[4] for item in all_faces) / len(all_faces)
 
         # Target top ~40% section: 1080x768 -> aspect ratio 1.40625
         top_aspect = 1080.0 / 768.0
-        crop_h = int(max(avg_h * 3.8, orig_h * 0.28, 280))
+        crop_h = int(max(avg_h * 4.0, (max_y - min_y) * 2.2, orig_h * 0.28, 280))
         crop_w = int(round(crop_h * top_aspect))
 
         if crop_w > orig_w:
@@ -276,8 +311,6 @@ def detect_facecam_box(
             crop_h = orig_h
             crop_w = int(round(crop_h * top_aspect))
 
-        cx = avg_x + avg_w / 2.0
-        cy = avg_y + avg_h / 2.0
         crop_x = int(cx - crop_w / 2.0)
         crop_y = int(cy - crop_h / 2.0)
 
@@ -385,13 +418,15 @@ def reframe_video(
 
     # Resolve mode if auto
     actual_mode = selected_mode
+    face_box = None
     if selected_mode == "auto":
-        # For general streams and gaming, wide provides the highest visual quality
-        actual_mode = "wide"
+        face_box = detect_facecam_box(in_path, orig_w, orig_h)
+        actual_mode = "split" if face_box is not None else "wide"
 
     # Build filtergraph based on resolved mode
     if actual_mode == "split":
-        face_box = detect_facecam_box(in_path, orig_w, orig_h)
+        if face_box is None:
+            face_box = detect_facecam_box(in_path, orig_w, orig_h)
         if face_box is None:
             log.info("No facecam detected in %s; falling back to wide layout", in_path.name)
         filter_str = split_filtergraph(orig_w, orig_h, out_w, out_h, face_box=face_box)

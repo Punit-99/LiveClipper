@@ -3,11 +3,12 @@
 # Core LiveClipper Stream & Ingestion dependencies (Python 3.11 - 3.14)
 fastapi>=0.110.0,<1.0.0  # Web dashboard API server
 uvicorn>=0.28.0,<1.0.0   # ASGI web server
-requests>=2.32,<3        # HTTP client for Twitch Helix REST API calls
+requests>=2.32,<3        # HTTP client for YouTube REST API calls
 python-dotenv>=1.0,<2    # loads configuration from the local .env file
-websockets>=13,<16       # async WebSocket client for Twitch IRC chat
+websockets>=13,<16       # async WebSocket client for live dashboard
 google-genai>=1.0,<2     # official Google GenAI SDK for Gemini highlight analysis
-streamlink>=8,<9         # Twitch live HLS stream capture (Stage 5)
+streamlink>=8,<9         # YouTube/live HLS stream capture
+yt-dlp>=2024.0.0          # YouTube video downloader for Import Clipper
 
 # Video Processing & ML Pipeline (Merged from OpenShorts)
 # Note on Python compatibility:

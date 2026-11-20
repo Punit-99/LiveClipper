@@ -151,26 +151,17 @@ def build_streamlink_command(
     streamlink_bin: str,
     channel: str,
     config: RecordingConfig,
-    platform: str = "twitch",
+    platform: str = "youtube",
     video_id: str | None = None,
 ) -> list[str]:
-    """Build the verified Streamlink CLI command for Twitch or YouTube (Streamlink 8.6.3+).
-
-    Note: `--twitch-disable-ads` is intentionally omitted because Streamlink 8.6+
-    unconditionally skips Twitch ad segments by default.
-    """
+    """Build the verified Streamlink CLI command for YouTube live streams."""
     clean_channel = channel.lstrip("#").strip()
     if not clean_channel:
         raise ValueError("channel must be a non-empty identifier")
 
     cmd = [streamlink_bin]
-    if platform == "youtube" or video_id or clean_channel.startswith(("http://", "https://")):
-        stream_url = _resolve_youtube_stream_url(clean_channel, video_id)
-        cmd.extend(["--stdout", stream_url, config.quality])
-    else:
-        if config.low_latency:
-            cmd.append("--twitch-low-latency")
-        cmd.extend(["--stdout", f"https://www.twitch.tv/{clean_channel.lower()}", config.quality])
+    stream_url = _resolve_youtube_stream_url(clean_channel, video_id)
+    cmd.extend(["--stdout", stream_url, config.quality])
     return cmd
 
 
@@ -311,10 +302,10 @@ class StreamRecorder:
         initial_backoff_seconds: float = 2.0,
         max_backoff_seconds: float = 30.0,
         shutdown_grace_seconds: float = 4.0,
-        platform: str = "twitch",
+        platform: str = "youtube",
         video_id: str | None = None,
     ) -> None:
-        clean_channel = channel.lstrip("#").strip() if platform == "youtube" else channel.lstrip("#").strip().lower()
+        clean_channel = channel.lstrip("#").strip()
         if not clean_channel:
             raise ValueError("channel must be a non-empty identifier")
 

@@ -68,6 +68,23 @@ class Stage5PinAndSubmitSink:
     def __call__(self, event: HighlightEvent) -> bool:
         """Submit `event` to Gemini analysis and pin its rolling buffer window if accepted."""
         plan = self._planner.plan(event)
+
+        # Enhance event with live buffer audio energy if available
+        if not event.audio_energy and self._buffer_manager is not None:
+            try:
+                sel = self._buffer_manager.query_range(plan.requested_clip_start, plan.requested_clip_end)
+                if sel and sel.segments:
+                    from app.clipper.audio_energy import analyze_clip_audio_energy
+                    for seg in reversed(sel.segments):
+                        seg_p = Path(seg.file_path)
+                        if seg_p.is_file():
+                            ae = analyze_clip_audio_energy(seg_p)
+                            if ae.get("available"):
+                                event.audio_energy = ae
+                                break
+            except Exception as exc:
+                log.debug("Live audio energy analysis skipped for %s: %s", event.event_id[:8], exc)
+
         accepted = self._submit(event)
         if not accepted:
             self.analysis_rejected_count += 1

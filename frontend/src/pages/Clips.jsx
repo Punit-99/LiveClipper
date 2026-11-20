@@ -1,656 +1,348 @@
-import React, { useState } from 'react';
-import { 
-  Play, 
-  Film, 
-  Filter, 
-  Sparkles, 
-  Clock, 
-  CheckCircle2, 
-  X, 
-  Loader2, 
-  ArrowUpDown,
-  Youtube,
-  Tv,
+import React, { useState } from "react"
+import {
+  Scissors,
+  LayoutGrid,
+  Table as TableIcon,
+  Film,
   Trash2,
-  AlertTriangle
-} from 'lucide-react';
-import { formatDuration, formatDateTime, formatRelativeTime, deleteSingleClip, deleteAllClips } from '../api';
-import { formatChannelName } from '../utils/channels';
+  RotateCw,
+  Search,
+  Filter,
+  CheckCircle2,
+} from "lucide-react"
+import { Card, CardContent } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { ClipCard } from "@/components/clips/ClipCard"
+import { ClipTable } from "@/components/clips/ClipTable"
+import { ClipPlayer } from "@/components/clips/ClipPlayer"
+import { toast } from "sonner"
 
-const STAGE_LABELS = {
-  trimming: 'Trimming Duration (adapt_clip_duration)',
-  reframing: 'Reframing 9:16 Vertical Video (auto/wide)',
-  transcribing: 'Transcribing Audio (faster-whisper)',
-  subtitles: 'Generating Animated Subtitles (ASS/SRT)',
-  hooks: 'Overlaying Hook Title Banner',
-  encoding: 'Encoding Final 1080x1920 Short',
-};
-
-const ORDERED_STAGES = ['trimming', 'reframing', 'transcribing', 'subtitles', 'hooks', 'encoding'];
-
-export default function Clips({ 
-  clips = [], 
-  onProcessSingle, 
-  onProcessAll, 
-  isProcessing, 
+export default function ClipsPage({
+  clips = [],
+  onProcessSingle,
+  onProcessAll,
   onRefresh,
   onDeleteClip,
   onDeleteAllClips,
-  showToast,
-  processingStatus,
-  onDismissProcessingStatus,
 }) {
-  const [selectedClip, setSelectedClip] = useState(null);
-  const [channelFilter, setChannelFilter] = useState('');
-  const [platformFilter, setPlatformFilter] = useState('');
-  const [scoreFilter, setScoreFilter] = useState(0);
-  const [sortBy, setSortBy] = useState('newest');
-  const [processingId, setProcessingId] = useState(null);
-  const [clipToDelete, setClipToDelete] = useState(null);
-  const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
-  const [deletingId, setDeletingId] = useState(null);
-  const [isDeletingAll, setIsDeletingAll] = useState(false);
+  const [viewMode, setViewMode] = useState("grid") // "grid" | "table"
+  const [searchQuery, setSearchQuery] = useState("")
+  const [channelFilter, setChannelFilter] = useState("all")
+  const [scoreFilter, setScoreFilter] = useState("all")
+  const [typeFilter, setTypeFilter] = useState("all") // "all" | "live" | "imported"
 
-  // Derive unique channels for filter
-  const channels = Array.from(new Set(clips.map(c => c.channel))).filter(Boolean);
+  const [selectedIds, setSelectedIds] = useState([])
+  const [previewClip, setPreviewClip] = useState(null)
+  const [clipToDelete, setClipToDelete] = useState(null)
+  const [showDeleteAllDialog, setShowDeleteAllDialog] = useState(false)
 
-  // Filter & sort (newest recorded first by default)
-  const filteredClips = clips.filter(c => {
-    if (channelFilter && c.channel.toLowerCase() !== channelFilter.toLowerCase()) return false;
-    if (platformFilter && c.platform.toLowerCase() !== platformFilter.toLowerCase()) return false;
-    if (scoreFilter > 0 && c.score < scoreFilter) return false;
-    return true;
-  }).sort((a, b) => {
-    if (sortBy === 'score') return b.score - a.score;
-    if (sortBy === 'duration') return b.duration - a.duration;
-    const timeA = a.recorded_at_iso || a.extracted_at || '';
-    const timeB = b.recorded_at_iso || b.extracted_at || '';
-    return timeB.localeCompare(timeA);
-  });
+  // Channels list for filter dropdown
+  const channels = Array.from(new Set(clips.map((c) => c.channel || c.streamer_name))).filter(Boolean)
 
-  const handleProcessSingle = async (clipId) => {
-    setProcessingId(clipId);
-    try {
-      await onProcessSingle(clipId);
-    } finally {
-      setProcessingId(null);
+  // Filter clips
+  const filteredClips = clips.filter((clip) => {
+    const title = (clip.title || clip.suggested_title || clip.clip_id || "").toLowerCase()
+    const channel = (clip.channel || clip.streamer_name || "").toLowerCase()
+    const search = searchQuery.toLowerCase()
+
+    if (search && !title.includes(search) && !channel.includes(search)) return false
+    if (channelFilter !== "all" && (clip.channel || clip.streamer_name) !== channelFilter) return false
+
+    const score = Number(clip.score || clip.highlight_score || 0)
+    if (scoreFilter === "80" && score < 80) return false
+    if (scoreFilter === "60" && score < 60) return false
+
+    const isImported = Boolean(
+      clip.is_imported || clip.source_type === "imported" || clip.clip_id?.startsWith("imp_")
+    )
+    if (typeFilter === "live" && isImported) return false
+    if (typeFilter === "imported" && !isImported) return false
+
+    return true
+  })
+
+  // Selection handlers
+  const handleToggleSelect = (clipId) => {
+    setSelectedIds((prev) =>
+      prev.includes(clipId) ? prev.filter((id) => id !== clipId) : [...prev, clipId]
+    )
+  }
+
+  const handleToggleSelectAll = () => {
+    if (selectedIds.length === filteredClips.length) {
+      setSelectedIds([])
+    } else {
+      setSelectedIds(filteredClips.map((c) => c.clip_id))
     }
-  };
+  }
 
-  const handleConfirmDeleteSingle = async () => {
-    if (!clipToDelete) return;
-    const cid = clipToDelete.id;
-    setDeletingId(cid);
-    setClipToDelete(null);
-    try {
-      if (onDeleteClip) {
-        await onDeleteClip(cid);
-      } else {
-        await deleteSingleClip(cid);
-        if (onRefresh) onRefresh();
+  // Batch process
+  const handleBatchProcess = async () => {
+    if (selectedIds.length === 0) return
+    let successCount = 0
+    for (const id of selectedIds) {
+      try {
+        await onProcessSingle(id)
+        successCount++
+      } catch (err) {
+        console.error("Failed processing clip", id, err)
       }
-      if (showToast) showToast('Clip deleted', 'success');
-    } catch (err) {
-      if (showToast) showToast(err.message || 'Failed to delete clip', 'error');
-    } finally {
-      setTimeout(() => setDeletingId(null), 350);
     }
-  };
+    toast.success(`Queued ${successCount} clips for Shorts processing!`)
+    setSelectedIds([])
+  }
 
-  const handleConfirmDeleteAll = async () => {
-    setIsDeletingAll(true);
-    setShowDeleteAllModal(false);
-    try {
-      if (onDeleteAllClips) {
-        await onDeleteAllClips();
-      } else {
-        await deleteAllClips();
-        if (onRefresh) onRefresh();
+  // Batch delete
+  const handleBatchDelete = async () => {
+    if (selectedIds.length === 0) return
+    let count = 0
+    for (const id of selectedIds) {
+      try {
+        await onDeleteClip(id)
+        count++
+      } catch (err) {
+        console.error("Failed deleting clip", id, err)
       }
-      if (showToast) showToast('All clips deleted', 'success');
-    } catch (err) {
-      if (showToast) showToast(err.message || 'Failed to delete all clips', 'error');
-    } finally {
-      setIsDeletingAll(false);
     }
-  };
+    toast.success(`Deleted ${count} clips.`)
+    setSelectedIds([])
+  }
+
+  const handleDeleteSingle = async () => {
+    if (!clipToDelete) return
+    try {
+      await onDeleteClip(clipToDelete.clip_id)
+      toast.success("Clip deleted successfully.")
+    } catch (err) {
+      toast.error(err.message || "Failed to delete clip.")
+    } finally {
+      setClipToDelete(null)
+    }
+  }
 
   return (
     <div className="space-y-6">
-      {/* Clip Processing Progress Banner */}
-      {processingStatus && (
-        <div className={`p-4 rounded-2xl border transition-all duration-300 shadow-lg ${
-          processingStatus.status === 'completed'
-            ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300 shadow-emerald-500/5'
-            : processingStatus.status === 'failed'
-            ? 'bg-red-950/40 border-red-500/50 text-red-300 shadow-red-500/5'
-            : 'bg-[#121722] border-[#24334f] text-slate-200'
-        }`}>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center space-x-3">
-              {processingStatus.status === 'completed' ? (
-                <div className="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center shrink-0">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                </div>
-              ) : processingStatus.status === 'failed' ? (
-                <div className="w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center shrink-0">
-                  <AlertTriangle className="w-5 h-5 text-red-400" />
-                </div>
-              ) : (
-                <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center shrink-0">
-                  <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
-                </div>
-              )}
-              <div>
-                <div className="flex items-center space-x-2">
-                  <span className="font-bold text-white text-sm">
-                    {processingStatus.status === 'completed'
-                      ? 'Short ready! ✓'
-                      : processingStatus.status === 'failed'
-                      ? 'Processing Failed'
-                      : `Processing: ${processingStatus.title || processingStatus.clip_id}`}
-                  </span>
-                </div>
-                {processingStatus.status === 'processing' && (
-                  <div className="text-xs text-slate-400 mt-0.5">
-                    Stage: <span className="text-cyan-400 font-semibold">{STAGE_LABELS[processingStatus.stage] || processingStatus.stage}</span>
-                  </div>
-                )}
-                {processingStatus.status === 'failed' && (
-                  <p className="text-xs text-red-400 mt-0.5">{processingStatus.error}</p>
-                )}
-              </div>
-            </div>
-
-            <div className="flex items-center space-x-3">
-              <span className="text-sm font-mono font-bold text-slate-200">
-                {processingStatus.percentage}%
-              </span>
-              {processingStatus.status === 'failed' && onDismissProcessingStatus && (
-                <button
-                  onClick={onDismissProcessingStatus}
-                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-[#182030]"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Progress Bar Track & Bar */}
-          <div className="w-full h-2.5 bg-[#0a0d14] rounded-full overflow-hidden mb-3 border border-[#1f293d]">
-            <div
-              className={`h-full transition-all duration-500 rounded-full ${
-                processingStatus.status === 'completed'
-                  ? 'bg-emerald-500'
-                  : processingStatus.status === 'failed'
-                  ? 'bg-red-500'
-                  : 'bg-gradient-to-r from-blue-500 via-indigo-500 to-cyan-400'
-              }`}
-              style={{ width: `${Math.min(100, Math.max(5, processingStatus.percentage || 0))}%` }}
-            />
-          </div>
-
-          {/* Stage Progression Breadcrumb */}
-          {processingStatus.status === 'processing' && (
-            <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-[#1f293d]/50 gap-1">
-              {ORDERED_STAGES.map((st, idx) => {
-                const currentIdx = ORDERED_STAGES.indexOf(processingStatus.stage);
-                const isPassed = currentIdx > idx;
-                const isCurrent = currentIdx === idx;
-                return (
-                  <div key={st} className="flex items-center space-x-1">
-                    <span className={`capitalize font-mono ${
-                      isCurrent
-                        ? 'text-cyan-400 font-bold underline'
-                        : isPassed
-                        ? 'text-emerald-400 font-medium'
-                        : 'text-slate-600'
-                    }`}>
-                      {isPassed ? '✓ ' : ''}{st}
-                    </span>
-                    {idx < ORDERED_STAGES.length - 1 && (
-                      <span className="text-slate-700 ml-1">→</span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Header & Batch Actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#121722] border border-[#1f293d] rounded-2xl p-6">
+      {/* Top Header & Controls */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-white flex items-center space-x-2">
-            <span>Extracted Highlight Clips</span>
-            <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
-              {filteredClips.length} clips
-            </span>
+          <h2 className="text-xl font-bold tracking-tight text-white flex items-center space-x-2">
+            <span>Video Highlight Clips</span>
+            <Badge variant="outline" className="text-xs">
+              {filteredClips.length} {filteredClips.length === 1 ? "clip" : "clips"}
+            </Badge>
           </h2>
-          <p className="text-xs text-slate-400 mt-1">
-            Raw stream highlights extracted based on live chat spikes and Gemini analysis.
+          <p className="text-xs text-slate-400">
+            Raw highlight clips extracted from live broadcast events and imported YouTube videos.
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 self-start sm:self-auto">
-          <button
-            onClick={() => setShowDeleteAllModal(true)}
-            disabled={!clips.length || isDeletingAll}
-            className="flex items-center space-x-2 px-4 py-2.5 border border-red-500/40 text-red-400 hover:bg-red-500/10 disabled:opacity-40 disabled:cursor-not-allowed rounded-xl text-sm font-semibold transition-all"
-          >
-            {isDeletingAll ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Deleting...</span>
-              </>
-            ) : (
-              <>
-                <Trash2 className="w-4 h-4" />
-                <span>Delete All Clips</span>
-              </>
-            )}
-          </button>
-
-          <button
-            onClick={onProcessAll}
-            disabled={isProcessing || !clips.length}
-            className="flex items-center space-x-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm transition-all shadow-lg shadow-blue-500/20"
-          >
-            {isProcessing ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Processing All...</span>
-              </>
-            ) : (
-              <>
-                <Film className="w-4 h-4" />
-                <span>Process All to Shorts</span>
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* Filter and Sort Toolbar */}
-      <div className="bg-[#121722] border border-[#1f293d] rounded-xl p-4 flex flex-wrap items-center justify-between gap-4 text-xs">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center space-x-2 text-slate-400 font-semibold">
-            <Filter className="w-4 h-4" />
-            <span>Filter:</span>
-          </div>
-
-          {/* Channel dropdown */}
-          <select
-            value={channelFilter}
-            onChange={(e) => setChannelFilter(e.target.value)}
-            className="bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500"
-          >
-            <option value="">All Channels</option>
-            {channels.map((ch) => (
-              <option key={ch} value={ch}>
-                {formatChannelName(ch)}
-              </option>
-            ))}
-          </select>
-
-          {/* Platform filter */}
-          <select
-            value={platformFilter}
-            onChange={(e) => setPlatformFilter(e.target.value)}
-            className="bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500"
-          >
-            <option value="">All Platforms</option>
-            <option value="twitch">Twitch</option>
-            <option value="youtube">YouTube</option>
-          </select>
-
-          {/* Score filter */}
-          <select
-            value={scoreFilter}
-            onChange={(e) => setScoreFilter(Number(e.target.value))}
-            className="bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500"
-          >
-            <option value="0">Min Score: Any</option>
-            <option value="70">Score 70+</option>
-            <option value="80">Score 80+</option>
-            <option value="85">Score 85+ (Viral)</option>
-          </select>
-        </div>
-
-        {/* Sort */}
+        {/* View Toggle & Refresh */}
         <div className="flex items-center space-x-2">
-          <span className="text-slate-400 font-semibold flex items-center space-x-1">
-            <ArrowUpDown className="w-3.5 h-3.5" />
-            <span>Sort by:</span>
-          </span>
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value)}
-            className="bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500"
-          >
-            <option value="newest">Newest First</option>
-            <option value="score">Highest Score</option>
-            <option value="duration">Longest Duration</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Grid of Clip Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {filteredClips.map((clip) => {
-          const isYouTube = clip.platform?.toLowerCase() === 'youtube';
-          const isProcessingThis = processingId === clip.id;
-
-          return (
-            <div
-              key={clip.id}
-              className={`bg-[#121722] border border-[#1f293d] rounded-2xl overflow-hidden flex flex-col justify-between hover:border-slate-600 transition-all duration-300 group ${
-                deletingId === clip.id ? 'opacity-0 scale-95 pointer-events-none' : 'opacity-100 scale-100'
+          {/* Dual view switcher */}
+          <div className="flex items-center bg-[#0d131f] border border-[#1f293d] rounded-lg p-0.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setViewMode("grid")}
+              className={`h-7 px-2.5 text-xs ${
+                viewMode === "grid" ? "bg-primary text-white" : "text-slate-400 hover:text-white"
               }`}
             >
-              {/* Video Preview Card Header */}
-              <div 
-                className="relative aspect-video bg-black cursor-pointer overflow-hidden group/video"
-                onClick={() => setSelectedClip(clip)}
-              >
-                <video
-                  src={`/api/clips/${clip.id}/preview`}
-                  preload="metadata"
-                  className="w-full h-full object-cover group-hover/video:scale-105 transition-transform duration-300"
-                />
-                
-                {/* Overlay Play Button */}
-                <div className="absolute inset-0 bg-black/40 group-hover/video:bg-black/20 flex items-center justify-center transition-colors">
-                  <div className="w-12 h-12 rounded-full bg-blue-600/90 text-white flex items-center justify-center shadow-lg group-hover/video:scale-110 transition-transform">
-                    <Play className="w-5 h-5 fill-current ml-0.5" />
-                  </div>
-                </div>
-
-                {/* Score badge & delete action top-right */}
-                <div className="absolute top-3 right-3 flex items-center space-x-1.5 z-10">
-                  <span className={`px-2.5 py-1 rounded-lg text-xs font-black shadow-md ${
-                    clip.score >= 80 
-                      ? 'bg-emerald-500 text-black' 
-                      : 'bg-amber-500 text-black'
-                  }`}>
-                    {clip.score}/100
-                  </span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setClipToDelete(clip);
-                    }}
-                    title="Delete clip"
-                    className="p-1.5 rounded-lg bg-black/70 backdrop-blur-md text-slate-400 hover:text-red-400 hover:bg-red-500/20 transition-all shadow-md group/trash"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-
-                {/* Platform badge top-left */}
-                <div className="absolute top-3 left-3 flex items-center space-x-1.5 bg-black/70 backdrop-blur-md px-2 py-1 rounded-md text-xs font-semibold text-white">
-                  {isYouTube ? <Youtube className="w-3.5 h-3.5 text-red-500" /> : <Tv className="w-3.5 h-3.5 text-purple-400" />}
-                  <span>{formatChannelName(clip.channel)}</span>
-                </div>
-
-                {/* Duration bottom-right */}
-                <div className="absolute bottom-2 right-2 bg-black/80 px-2 py-0.5 rounded text-[11px] font-mono text-slate-200">
-                  {formatDuration(clip.duration)}
-                </div>
-              </div>
-
-              {/* Card Body */}
-              <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
-                <div className="space-y-2">
-                  <div className="flex items-center space-x-2">
-                    <span className="text-[11px] uppercase tracking-wider font-bold px-2 py-0.5 rounded bg-[#182030] text-slate-300 border border-[#24334f]">
-                      {clip.category?.replace('_', ' ')}
-                    </span>
-                    {clip.has_short && (
-                      <span className="flex items-center space-x-1 text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                        <CheckCircle2 className="w-3 h-3" />
-                        <span>Short Ready</span>
-                      </span>
-                    )}
-                  </div>
-
-                  <h3 className="font-bold text-sm text-slate-100 line-clamp-2">
-                    {clip.title}
-                  </h3>
-
-                  {clip.quotes && clip.quotes.length > 0 && (
-                    <p className="text-xs text-slate-400 italic line-clamp-1">
-                      "{clip.quotes[0]}"
-                    </p>
-                  )}
-
-                  {/* Recorded date & time */}
-                  <div className="flex items-center space-x-1.5 text-[11px] text-slate-400 pt-1">
-                    <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                    <span>{formatDateTime(clip.recorded_at_iso || clip.extracted_at) || 'Recently recorded'}</span>
-                    {(clip.recorded_at_iso || clip.extracted_at) && (
-                      <>
-                        <span className="text-slate-600">•</span>
-                        <span className="text-slate-500">{formatRelativeTime(clip.recorded_at_iso || clip.extracted_at)}</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="pt-2 border-t border-[#1f293d]/80 flex items-center justify-between gap-2">
-                  <button
-                    onClick={() => setSelectedClip(clip)}
-                    className="px-3 py-2 text-xs font-semibold text-slate-300 bg-[#182030] hover:bg-[#222e45] rounded-xl border border-[#24334f] transition-colors"
-                  >
-                    Details & Quotes
-                  </button>
-
-                  <button
-                    onClick={() => handleProcessSingle(clip.id)}
-                    disabled={isProcessingThis}
-                    className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-xl transition-all shadow-sm shadow-blue-500/20"
-                  >
-                    {isProcessingThis ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Processing...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Film className="w-3.5 h-3.5" />
-                        <span>{clip.has_short ? 'Re-Process' : 'Process to Short'}</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-
-        {!filteredClips.length && (
-          <div className="col-span-full py-16 text-center bg-[#121722] border border-[#1f293d] rounded-2xl text-slate-400">
-            <Film className="w-12 h-12 mx-auto text-slate-600 mb-3" />
-            <h3 className="text-lg font-bold text-slate-300">No clips match your filters</h3>
-            <p className="text-xs text-slate-500 mt-1">Try resetting the channel, platform, or score filter options.</p>
+              <LayoutGrid className="w-3.5 h-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setViewMode("table")}
+              className={`h-7 px-2.5 text-xs ${
+                viewMode === "table" ? "bg-primary text-white" : "text-slate-400 hover:text-white"
+              }`}
+            >
+              <TableIcon className="w-3.5 h-3.5" />
+            </Button>
           </div>
-        )}
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onRefresh}
+            className="h-8 text-xs border-[#1f293d] hover:bg-[#1a2233]"
+          >
+            <RotateCw className="w-3.5 h-3.5" />
+          </Button>
+        </div>
       </div>
 
-      {/* Modal Video Player */}
-      {selectedClip && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#121722] border border-[#1f293d] rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
-            {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-[#1f293d] flex items-center justify-between">
-              <div>
-                <div className="flex items-center space-x-2">
-                  <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-blue-500/10 text-blue-400">
-                    {formatChannelName(selectedClip.channel)}
-                  </span>
-                  <span className="text-sm font-bold text-white line-clamp-1">{selectedClip.title}</span>
-                </div>
-                <div className="flex items-center space-x-2 text-xs text-slate-400 mt-1">
-                  <span>Score: {selectedClip.score}/100</span>
-                  <span>•</span>
-                  <span>{formatDuration(selectedClip.duration)}</span>
-                  {(selectedClip.recorded_at_iso || selectedClip.extracted_at) && (
-                    <>
-                      <span>•</span>
-                      <span className="flex items-center space-x-1">
-                        <Clock className="w-3 h-3 text-slate-500" />
-                        <span>Recorded: {formatDateTime(selectedClip.recorded_at_iso || selectedClip.extracted_at)}</span>
-                      </span>
-                    </>
-                  )}
-                </div>
-              </div>
-              <button
-                onClick={() => setSelectedClip(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors ml-3"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {/* Filter Bar */}
+      <Card className="border-[#1f293d] bg-[#121826]/80 p-3.5">
+        <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
+          {/* Search text input */}
+          <div className="relative flex-1 max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+            <Input
+              placeholder="Search by title or channel..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-8 h-8 text-xs border-[#1f293d] bg-[#0d131f]"
+            />
+          </div>
 
-            {/* Video Player */}
-            <div className="bg-black aspect-video flex items-center justify-center">
-              <video
-                src={`/api/clips/${selectedClip.id}/preview`}
-                controls
-                autoPlay
-                className="w-full h-full max-h-[50vh] object-contain"
-              />
-            </div>
+          {/* Filter dropdowns */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Channel filter */}
+            <Select value={channelFilter} onValueChange={setChannelFilter}>
+              <SelectTrigger className="h-8 w-36 text-xs border-[#1f293d] bg-[#0d131f]">
+                <SelectValue placeholder="All Channels" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Channels</SelectItem>
+                {channels.map((ch) => (
+                  <SelectItem key={ch} value={ch}>
+                    {ch}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
-            {/* Modal Details */}
-            <div className="p-6 overflow-y-auto space-y-4 text-xs">
-              <div>
-                <h4 className="text-slate-400 uppercase tracking-wider font-semibold mb-1">Gemini AI Reasoning</h4>
-                <p className="text-slate-200 leading-relaxed bg-[#182030] p-3 rounded-xl border border-[#24334f]">
-                  {selectedClip.reasoning || 'No analysis reasoning logged.'}
-                </p>
-              </div>
+            {/* Score filter */}
+            <Select value={scoreFilter} onValueChange={setScoreFilter}>
+              <SelectTrigger className="h-8 w-32 text-xs border-[#1f293d] bg-[#0d131f]">
+                <SelectValue placeholder="All Scores" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Scores</SelectItem>
+                <SelectItem value="80">Score ≥ 80</SelectItem>
+                <SelectItem value="60">Score ≥ 60</SelectItem>
+              </SelectContent>
+            </Select>
 
-              {selectedClip.quotes && selectedClip.quotes.length > 0 && (
-                <div>
-                  <h4 className="text-slate-400 uppercase tracking-wider font-semibold mb-2">Key Chat Reaction Quotes</h4>
-                  <div className="flex flex-wrap gap-2">
-                    {selectedClip.quotes.map((q, idx) => (
-                      <span
-                        key={idx}
-                        className="bg-[#182030] text-slate-300 border border-[#24334f] px-3 py-1.5 rounded-lg italic"
-                      >
-                        "{q}"
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Modal Footer */}
-            <div className="px-6 py-3 border-t border-[#1f293d] flex justify-end space-x-3 bg-[#0d121d]">
-              <button
-                onClick={() => setSelectedClip(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold"
-              >
-                Close
-              </button>
-              <button
-                onClick={() => {
-                  handleProcessSingle(selectedClip.id);
-                  setSelectedClip(null);
-                }}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold"
-              >
-                Process to Vertical Short
-              </button>
-            </div>
+            {/* Source Type Filter */}
+            <Select value={typeFilter} onValueChange={setTypeFilter}>
+              <SelectTrigger className="h-8 w-32 text-xs border-[#1f293d] bg-[#0d131f]">
+                <SelectValue placeholder="All Sources" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Sources</SelectItem>
+                <SelectItem value="live">Live Stream</SelectItem>
+                <SelectItem value="imported">Imported URL</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
-      )}
 
-      {/* Delete Single Clip Confirmation Modal */}
-      {clipToDelete && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[#121722] border border-[#1f293d] rounded-2xl w-full max-w-md overflow-hidden shadow-2xl p-6 space-y-4">
-            <div className="flex items-center space-x-3 text-red-400">
-              <div className="p-2.5 rounded-xl bg-red-500/10 border border-red-500/20">
-                <AlertTriangle className="w-5 h-5 text-red-400" />
-              </div>
-              <h3 className="text-base font-bold text-white">Delete Clip</h3>
-            </div>
-            
-            <p className="text-sm text-slate-300">
-              Delete this clip? This cannot be undone.
-            </p>
-
-            <div className="bg-[#182030] p-3 rounded-xl border border-[#24334f] text-xs space-y-1">
-              <div className="font-bold text-white line-clamp-1">{clipToDelete.title}</div>
-              <div className="text-slate-400 flex items-center justify-between">
-                <span>Channel: {formatChannelName(clipToDelete.channel)}</span>
-                <span>Score: {clipToDelete.score}/100</span>
-              </div>
-            </div>
-
-            <div className="flex justify-end space-x-3 pt-2">
-              <button
-                onClick={() => setClipToDelete(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition-colors"
+        {/* Batch action banner if items selected */}
+        {selectedIds.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-[#1f293d] flex items-center justify-between text-xs">
+            <span className="text-slate-300 font-medium">
+              {selectedIds.length} {selectedIds.length === 1 ? "clip" : "clips"} selected
+            </span>
+            <div className="flex items-center space-x-2">
+              <Button
+                size="sm"
+                onClick={handleBatchProcess}
+                className="h-7 text-xs bg-blue-600 hover:bg-blue-500 text-white font-medium"
               >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmDeleteSingle}
-                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-semibold transition-colors shadow-lg shadow-red-600/20"
+                <Film className="w-3 h-3 mr-1.5" />
+                <span>Process Selected ({selectedIds.length})</span>
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleBatchDelete}
+                className="h-7 text-xs"
               >
-                Delete Clip
-              </button>
+                <Trash2 className="w-3 h-3 mr-1.5" />
+                <span>Delete Selected</span>
+              </Button>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Card>
 
-      {/* Delete All Clips Confirmation Modal */}
-      {showDeleteAllModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[#121722] border border-[#1f293d] rounded-2xl w-full max-w-md overflow-hidden shadow-2xl p-6 space-y-4">
-            <div className="flex items-center space-x-3 text-red-400">
-              <div className="p-2.5 rounded-xl bg-red-500/10 border border-red-500/20">
-                <AlertTriangle className="w-5 h-5 text-red-400" />
-              </div>
-              <h3 className="text-base font-bold text-white">Delete All Clips</h3>
-            </div>
-
-            <p className="text-sm text-slate-300">
-              Delete ALL clips? This will remove {clips.length} clip{clips.length === 1 ? '' : 's'} permanently.
-            </p>
-
-            <p className="text-xs text-slate-500">
-              All raw MP4 highlights and JSON metadata files will be deleted from disk.
-            </p>
-
-            <div className="flex justify-end space-x-3 pt-2">
-              <button
-                onClick={() => setShowDeleteAllModal(false)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmDeleteAll}
-                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-semibold transition-colors shadow-lg shadow-red-600/20"
-              >
-                Delete All Permanently
-              </button>
-            </div>
+      {/* Main View: Grid vs Table */}
+      {filteredClips.length === 0 ? (
+        <Card className="border-[#1f293d] bg-[#121826]/60 p-12 text-center space-y-3">
+          <div className="w-12 h-12 rounded-xl bg-blue-500/10 text-blue-400 mx-auto flex items-center justify-center">
+            <Scissors className="w-6 h-6" />
           </div>
+          <h4 className="font-semibold text-sm text-white">No Clips Found</h4>
+          <p className="text-xs text-slate-400 max-w-sm mx-auto">
+            {searchQuery || channelFilter !== "all" || scoreFilter !== "all"
+              ? "No clips match the selected search or filter criteria."
+              : "No clips have been extracted yet. Start stream monitoring or import a YouTube video to generate highlight clips."}
+          </p>
+        </Card>
+      ) : viewMode === "grid" ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredClips.map((clip) => (
+            <ClipCard
+              key={clip.clip_id}
+              clip={clip}
+              isSelected={selectedIds.includes(clip.clip_id)}
+              onToggleSelect={handleToggleSelect}
+              onPreview={(c) => setPreviewClip(c)}
+              onProcess={(cid) => {
+                onProcessSingle(cid)
+                toast.success("Clip queued for Shorts processing!")
+              }}
+              onDelete={(cid) => setClipToDelete(clip)}
+            />
+          ))}
         </div>
+      ) : (
+        <ClipTable
+          clips={filteredClips}
+          selectedIds={selectedIds}
+          onToggleSelect={handleToggleSelect}
+          onToggleSelectAll={handleToggleSelectAll}
+          onPreview={(c) => setPreviewClip(c)}
+          onProcess={(cid) => {
+            onProcessSingle(cid)
+            toast.success("Clip queued for Shorts processing!")
+          }}
+          onDelete={(cid) => {
+            const target = clips.find((c) => c.clip_id === cid)
+            if (target) setClipToDelete(target)
+          }}
+        />
       )}
+
+      {/* Clip Preview Modal */}
+      <ClipPlayer
+        clip={previewClip}
+        open={Boolean(previewClip)}
+        onOpenChange={(open) => !open && setPreviewClip(null)}
+      />
+
+      {/* Delete Confirmation Alert Dialog */}
+      <AlertDialog
+        open={Boolean(clipToDelete)}
+        onOpenChange={(open) => !open && setClipToDelete(null)}
+      >
+        <AlertDialogContent className="bg-[#0f1422] border-[#1f293d]">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-white">Delete Highlight Clip?</AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-400">
+              Are you sure you want to delete this clip? The MP4 file and its JSON sidecar will be permanently removed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-[#1f293d] text-slate-300">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteSingle}
+              className="bg-red-600 hover:bg-red-500 text-white"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
-  );
+  )
 }

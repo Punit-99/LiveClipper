@@ -232,24 +232,11 @@ class MonitoringSupervisor:
             self.waiting_for_targets = False
             self.monitored_channels_meta = {}
 
-            target_platform = (platform or self.settings.monitor_platform or "all").lower()
+            target_platform = "youtube"
             effective_channels = [c.strip() for c in (channels or []) if c and c.strip()]
 
             # Determine candidates
-            yt_candidates: list[str] = []
-            twitch_candidates: list[str] = []
-
-            if effective_channels:
-                for c in effective_channels:
-                    if c.startswith("UC") or target_platform == "youtube":
-                        yt_candidates.append(c)
-                    else:
-                        twitch_candidates.append(c.lstrip("#").lower())
-            else:
-                if target_platform in ("youtube", "all"):
-                    yt_candidates = list(self.settings.target_youtube_channels)
-                if target_platform in ("twitch", "all"):
-                    twitch_candidates = [c.lstrip("#").lower() for c in self.settings.target_channels]
+            yt_candidates: list[str] = effective_channels if effective_channels else list(self.settings.target_youtube_channels)
 
             # 1. Check YouTube targets
             live_yt_sessions: list[StreamSession] = []
@@ -287,50 +274,18 @@ class MonitoringSupervisor:
                         "start_time": time.time(),
                     }
 
-            # 2. Check Twitch targets
-            live_twitch_channels: list[str] = []
-            if twitch_candidates:
-                try:
-                    finder = StreamFinder(self.settings)
-                    t_res = finder.check_live_channels(twitch_candidates)
-                    for ch, s_live in t_res.items():
-                        if s_live:
-                            ch_disp = s_live.display_name or ch
-                            live_twitch_channels.append(ch)
-                            self.monitored_channels_meta[ch] = {
-                                "badge": "Target",
-                                "is_fallback": False,
-                                "platform": "twitch",
-                                "viewers": s_live.viewer_count,
-                                "start_time": time.time(),
-                            }
-                except Exception as exc:
-                    log.warning("Twitch live check failed during start: %s", exc)
-
             # If user explicitly supplied selected channels that are considered active, respect them
-            if effective_channels and not live_yt_sessions and not live_twitch_channels:
-                # User specifically chose channels in modal; monitor those directly
+            if effective_channels and not live_yt_sessions:
                 for c in effective_channels:
-                    if c.startswith("UC") or target_platform == "youtube":
-                        sess = StreamSession(channel=resolve_channel_name(c), settings=self.settings, platform="youtube")
-                        live_yt_sessions.append(sess)
-                        self.monitored_channels_meta[sess.channel] = {
-                            "badge": "Target",
-                            "is_fallback": False,
-                            "platform": "youtube",
-                            "viewers": 0,
-                            "start_time": time.time(),
-                        }
-                    else:
-                        ch_norm = c.lstrip("#").lower()
-                        live_twitch_channels.append(ch_norm)
-                        self.monitored_channels_meta[ch_norm] = {
-                            "badge": "Target",
-                            "is_fallback": False,
-                            "platform": "twitch",
-                            "viewers": 0,
-                            "start_time": time.time(),
-                        }
+                    sess = StreamSession(channel=resolve_channel_name(c), settings=self.settings, platform="youtube")
+                    live_yt_sessions.append(sess)
+                    self.monitored_channels_meta[sess.channel] = {
+                        "badge": "Target",
+                        "is_fallback": False,
+                        "platform": "youtube",
+                        "viewers": 0,
+                        "start_time": time.time(),
+                    }
 
             # Enforce max concurrent streams
             max_allowed = (
@@ -339,22 +294,17 @@ class MonitoringSupervisor:
                 else 1
             )
 
-            total_live_targets = len(live_yt_sessions) + len(live_twitch_channels)
-
             # Case A: Live target channels found -> start recording target streams
-            if total_live_targets > 0:
+            if live_yt_sessions:
                 selected_yt = live_yt_sessions[:max_allowed]
-                rem = max(0, max_allowed - len(selected_yt))
-                selected_twitch = live_twitch_channels[:rem]
-
                 return await self._launch_manager(
-                    twitch_channels=selected_twitch,
+                    twitch_channels=[],
                     custom_sessions=selected_yt,
                     platform=target_platform,
                 )
 
             # Case B: NO target channels are live -> Enter Fallback Discovery (Mode B)
-            target_names = [resolve_channel_name(c) for c in (yt_candidates + twitch_candidates)]
+            target_names = [resolve_channel_name(c) for c in yt_candidates]
             offline_msg = f"Target channels offline: {', '.join(target_names) if target_names else 'None configured'}"
             log.info(offline_msg)
             ws_manager.broadcast_sync("live_log", {
@@ -409,74 +359,52 @@ class MonitoringSupervisor:
             # Case C: No alternative streams discovered either
             log.info("No alternative streams found. Polling for target channels to come online...")
             self.waiting_for_targets = True
-            self._start_target_polling_task(yt_candidates, twitch_candidates)
+            self._start_target_polling_task(yt_candidates)
             return {
                 "status": "waiting_for_targets",
                 "message": "Target channels are offline and no alternative streams were found. Polling targets.",
             }
 
-    async def _discover_fallback_streams(self, platform: str) -> list[dict[str, Any]]:
-        """Run Mode B Category Discovery on YouTube and/or Twitch."""
+    async def _discover_fallback_streams(self, platform: str = "youtube") -> list[dict[str, Any]]:
+        """Run Mode B Category Discovery on YouTube."""
         discovered: list[dict[str, Any]] = []
 
-        # YouTube category discovery
-        if platform in ("youtube", "all"):
-            try:
-                token_mgr = None
-                if self.settings.youtube_tokens_path and self.settings.youtube_tokens_path.is_file():
-                    try:
-                        token_mgr = YouTubeTokenManager(
-                            tokens_path=self.settings.youtube_tokens_path,
-                            client_id=self.settings.youtube_client_id,
-                            client_secret=self.settings.youtube_client_secret,
-                        )
-                    except Exception:
-                        pass
+        try:
+            token_mgr = None
+            if self.settings.youtube_tokens_path and self.settings.youtube_tokens_path.is_file():
+                try:
+                    token_mgr = YouTubeTokenManager(
+                        tokens_path=self.settings.youtube_tokens_path,
+                        client_id=self.settings.youtube_client_id,
+                        client_secret=self.settings.youtube_client_secret,
+                    )
+                except Exception:
+                    pass
 
-                yt_finder = YouTubeStreamFinder(
-                    token_manager=token_mgr,
-                    api_key=self.settings.gemini_api_key,
-                )
-                cat_streams = yt_finder.discover_category_streams(
-                    query=self.settings.category_name or "GTA 6 live",
-                    min_viewers=20,
-                    max_results=8,
-                )
-                for s in cat_streams:
-                    if s.channel_id in self.settings.excluded_youtube_channels:
-                        continue
-                    discovered.append({
-                        "channel_id": s.channel_id,
-                        "channel_name": resolve_channel_name(s.channel_name or s.channel_id),
-                        "platform": "youtube",
-                        "viewer_count": s.viewer_count,
-                        "stream_title": s.stream_title,
-                        "category": self.settings.category_name,
-                        "language": s.language or "en",
-                        "video_id": s.video_id,
-                    })
-            except Exception as exc:
-                log.warning("YouTube category discovery failed: %s", exc)
-
-        # Twitch category discovery
-        if platform in ("twitch", "all"):
-            try:
-                finder = StreamFinder(self.settings)
-                _, t_streams = finder.discover()
-                for ts in t_streams:
-                    if ts.channel.lower() in [e.lower() for e in self.settings.excluded_target_channels]:
-                        continue
-                    discovered.append({
-                        "channel_id": ts.channel,
-                        "channel_name": ts.display_name or ts.channel,
-                        "platform": "twitch",
-                        "viewer_count": ts.viewer_count,
-                        "stream_title": ts.title,
-                        "category": self.settings.category_name,
-                        "language": ts.language or "en",
-                    })
-            except Exception as exc:
-                log.warning("Twitch category discovery failed: %s", exc)
+            yt_finder = YouTubeStreamFinder(
+                token_manager=token_mgr,
+                api_key=self.settings.gemini_api_key,
+            )
+            cat_streams = yt_finder.discover_category_streams(
+                query=self.settings.category_name or "GTA 6 live",
+                min_viewers=20,
+                max_results=8,
+            )
+            for s in cat_streams:
+                if s.channel_id in self.settings.excluded_youtube_channels:
+                    continue
+                discovered.append({
+                    "channel_id": s.channel_id,
+                    "channel_name": resolve_channel_name(s.channel_name or s.channel_id),
+                    "platform": "youtube",
+                    "viewer_count": s.viewer_count,
+                    "stream_title": s.stream_title,
+                    "category": self.settings.category_name,
+                    "language": s.language or "en",
+                    "video_id": s.video_id,
+                })
+        except Exception as exc:
+            log.warning("YouTube category discovery failed: %s", exc)
 
         # Sort descending by viewer count
         discovered.sort(key=lambda s: int(s.get("viewer_count", 0)), reverse=True)
@@ -485,7 +413,7 @@ class MonitoringSupervisor:
     async def _start_with_fallback_stream(self, stream_info: dict[str, Any]) -> dict[str, Any]:
         """Start monitoring a single approved fallback stream."""
         c_name = stream_info.get("channel_name") or stream_info.get("channel_id") or "fallback_stream"
-        plat = stream_info.get("platform", "twitch")
+        plat = "youtube"
         v_count = stream_info.get("viewer_count", 0)
 
         self.monitored_channels_meta[c_name] = {
@@ -496,26 +424,25 @@ class MonitoringSupervisor:
             "start_time": time.time(),
         }
 
-        if plat == "youtube":
-            sess = StreamSession(
-                channel=c_name,
-                settings=self.settings,
-                platform="youtube",
-                video_id=stream_info.get("video_id"),
-            )
-            return await self._launch_manager(twitch_channels=[], custom_sessions=[sess], platform="youtube")
-        else:
-            return await self._launch_manager(twitch_channels=[stream_info.get("channel_id", c_name)], custom_sessions=[], platform="twitch")
+        sess = StreamSession(
+            channel=c_name,
+            settings=self.settings,
+            platform="youtube",
+            video_id=stream_info.get("video_id"),
+        )
+        return await self._launch_manager(twitch_channels=[], custom_sessions=[sess], platform="youtube")
 
     async def _launch_manager(
         self,
-        twitch_channels: list[str],
-        custom_sessions: list[StreamSession],
-        platform: str,
+        twitch_channels: list[str] | None = None,
+        custom_sessions: list[StreamSession] | None = None,
+        platform: str = "youtube",
     ) -> dict[str, Any]:
         """Internal helper to initialize and run MultiStreamManager."""
-        self.active_platform = platform
-        self.active_channels = twitch_channels + [s.channel for s in custom_sessions]
+        tw_ch = twitch_channels or []
+        c_sess = custom_sessions or []
+        self.active_platform = "youtube"
+        self.active_channels = tw_ch + [s.channel for s in c_sess]
         self._start_time = time.time()
 
         max_streams = (
@@ -526,13 +453,13 @@ class MonitoringSupervisor:
 
         self.manager = MultiStreamManager(
             settings=self.settings,
-            channels=twitch_channels,
+            channels=tw_ch,
             max_concurrent_streams=max_streams,
             print_messages=False,
             auto_restart_online=True,
-            enable_liveness_check=(platform in ("twitch", "all")),
+            enable_liveness_check=False,
             enable_disk_budget=True,
-            custom_sessions=custom_sessions,
+            custom_sessions=c_sess,
             on_extracted=self._on_extracted,
             on_state_change=self._on_state_change,
             on_verdict=self._on_verdict,
@@ -556,24 +483,22 @@ class MonitoringSupervisor:
             meta = self.monitored_channels_meta.get(ch, {})
             ws_manager.broadcast_sync("recording_started", {
                 "channel": ch,
-                "platform": meta.get("platform", platform),
+                "platform": meta.get("platform", "youtube"),
                 "badge": meta.get("badge", "Target"),
                 "message": f"Started recording stream for {ch}",
             })
 
-        return {"status": "started", "platform": platform, "channels": self.active_channels}
+        return {"status": "started", "platform": "youtube", "channels": self.active_channels}
 
     def _start_target_polling_task(
         self,
         yt_candidates: list[str] | None = None,
-        twitch_candidates: list[str] | None = None,
     ) -> None:
         """Start a periodic background polling loop checking if any target channel went live."""
         if self._poll_task and not self._poll_task.done():
             return
 
         y_targets = list(yt_candidates or self.settings.target_youtube_channels)
-        t_targets = list(twitch_candidates or self.settings.target_channels)
         poll_interval = self.settings.liveness_poll_seconds or 60.0
 
         async def _poll_loop() -> None:
@@ -608,32 +533,6 @@ class MonitoringSupervisor:
                             }
                             await self._launch_manager(twitch_channels=[], custom_sessions=[sess], platform="youtube")
                             return
-
-                    # Check Twitch targets
-                    if t_targets:
-                        try:
-                            f = StreamFinder(self.settings)
-                            t_live = f.check_live_channels(t_targets)
-                            for ch, live_stream in t_live.items():
-                                if live_stream:
-                                    log.info("Target Twitch channel '%s' is now LIVE! Starting recording...", ch)
-                                    ws_manager.broadcast_sync("live_log", {
-                                        "level": "info",
-                                        "message": f"Target Twitch channel '{ch}' came online! Starting recording...",
-                                    })
-                                    ws_manager.broadcast_sync("target_channel_online", {"channel": ch, "platform": "twitch"})
-                                    self.waiting_for_targets = False
-                                    self.monitored_channels_meta[ch] = {
-                                        "badge": "Target",
-                                        "is_fallback": False,
-                                        "platform": "twitch",
-                                        "viewers": live_stream.viewer_count,
-                                        "start_time": time.time(),
-                                    }
-                                    await self._launch_manager(twitch_channels=[ch], custom_sessions=[], platform="twitch")
-                                    return
-                        except Exception:
-                            pass
                 except asyncio.CancelledError:
                     break
                 except Exception as exc:
@@ -821,11 +720,7 @@ class MonitoringSupervisor:
                 for c in (
                     self.active_channels
                     if is_mon
-                    else (
-                        list(self.settings.target_youtube_channels)
-                        if self.settings.monitor_platform == "youtube"
-                        else list(self.settings.target_channels)
-                    )
+                    else list(self.settings.target_youtube_channels)
                 )
             ],
             "active_channels": [resolve_channel_name(c) for c in active_ch],

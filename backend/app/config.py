@@ -37,24 +37,24 @@ class ConfigError(Exception):
 class Settings:
     """Typed, validated view of our configuration."""
 
-    client_id: str
-    client_secret: str
-    redirect_uri: str
-    category_name: str
-    max_streams: int
-    stream_language: str | None
+    client_id: str = ""
+    client_secret: str = ""
+    redirect_uri: str = "http://localhost:3000"
+    category_name: str = "Grand Theft Auto VI"
+    max_streams: int = 20
+    stream_language: str | None = None
     # --- chat spike detection thresholds ---
-    spike_window_seconds: float
-    spike_multiplier: float
-    spike_min_messages: int
-    spike_cooldown_seconds: float
-    spike_warmup_seconds: float
+    spike_window_seconds: float = 10.0
+    spike_multiplier: float = 3.0
+    spike_min_messages: int = 10
+    spike_cooldown_seconds: float = 15.0
+    spike_warmup_seconds: float = 30.0
     # --- candidate highlight event windows ---
-    event_pre_seconds: float
-    event_post_seconds: float
-    emote_weight: float
-    max_event_seconds: float
-    # --- Gemini AI highlight analysis (Stage 4; optional for Twitch-only scripts) ---
+    event_pre_seconds: float = 8.0
+    event_post_seconds: float = 12.0
+    emote_weight: float = 0.5
+    max_event_seconds: float = 45.0
+    # --- Gemini AI highlight analysis (Stage 4) ---
     gemini_api_key: str | None = None
     gemini_enabled: bool = True
     gemini_model: str = "gemini-3.1-flash-lite"
@@ -96,6 +96,7 @@ class Settings:
     shorts_output_dir: Path = _BACKEND_DIR / "shorts"
     shorts_engine: str = "auto"
     shorts_max_duration: float = 59.0
+    max_concurrent_processing: int = 2
     youtube_client_id: str | None = None
     youtube_client_secret: str | None = None
     youtube_privacy_status: str = "public"
@@ -103,6 +104,7 @@ class Settings:
     youtube_min_score: int = 75
     youtube_daily_limit: int = 5
     youtube_tokens_path: Path = _BACKEND_DIR / ".youtube_tokens.json"
+    max_concurrent_uploads: int = 3
     # --- Stage 8: Full OpenShorts Docker Integration ---
     openshorts_docker_image: str = "liveclipper/openshorts:latest"
     openshorts_docker_timeout: float = 600.0
@@ -115,7 +117,7 @@ class Settings:
     viral_title_emoji: bool = True
     viral_title_language: str = "en"
     # --- Stage 10: Multi-Platform, Video Quality & Language Filtering ---
-    monitor_platform: str = "twitch"  # "twitch" | "youtube" | "all"
+    monitor_platform: str = "youtube"  # Always defaults to youtube
     target_youtube_channels: tuple[str, ...] = (
         "UC7cs8q-gJRlGwj4A8OmCmXg",  # CarryMinati
         "UCvQ0C-sIKKlFaxyHYRE1YSg",  # Mortal
@@ -133,6 +135,13 @@ class Settings:
     shorts_output_bitrate: str = "6M"
     shorts_output_crf: int = 18
     youtube_chat_poll_interval: float = 2.0
+    # --- YouTube Video Clipper (Import feature) ---
+    import_max_clips: int = 5
+    import_clip_duration: float = 55.0
+    import_skip_intro: float = 0.0
+    import_skip_outro: float = 0.0
+    import_download_quality: int = 1080
+    imports_dir: Path = _BACKEND_DIR / "imports"
 
 
 def _require(name: str) -> str:
@@ -212,8 +221,8 @@ def load_settings(env_file: Path | str | None = None) -> Settings:
     except OSError:
         pass
 
-    client_id = _require("TWITCH_CLIENT_ID")
-    client_secret = _require("TWITCH_CLIENT_SECRET")
+    client_id = os.getenv("TWITCH_CLIENT_ID", "").strip()
+    client_secret = os.getenv("TWITCH_CLIENT_SECRET", "").strip()
     redirect_uri = os.getenv("TWITCH_REDIRECT_URI", "http://localhost:3000").strip()
     category_name = os.getenv("GTA6_CATEGORY_NAME", "Grand Theft Auto VI").strip()
 
@@ -228,9 +237,9 @@ def load_settings(env_file: Path | str | None = None) -> Settings:
     gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite").strip() or "gemini-3.1-flash-lite"
     recording_quality = os.getenv("RECORDING_QUALITY", "1080p60,1080p,720p60,best").strip() or "1080p60,1080p,720p60,best"
 
-    monitor_platform = os.getenv("MONITOR_PLATFORM", "twitch").strip().lower() or "all"
+    monitor_platform = os.getenv("MONITOR_PLATFORM", "youtube").strip().lower() or "youtube"
     if monitor_platform not in ("twitch", "youtube", "all"):
-        raise ConfigError(f"MONITOR_PLATFORM must be 'twitch', 'youtube', or 'all', got '{monitor_platform}'.")
+        monitor_platform = "youtube"
 
     target_yt_raw = os.getenv("TARGET_YOUTUBE_CHANNELS", "").strip()
     if target_yt_raw:
@@ -299,6 +308,7 @@ def load_settings(env_file: Path | str | None = None) -> Settings:
         shorts_output_dir=_path_env("SHORTS_OUTPUT_DIR", "shorts"),
         shorts_engine=os.getenv("SHORTS_ENGINE", "auto").strip().lower() or "auto",
         shorts_max_duration=_float_env("SHORTS_MAX_DURATION", 59.0),
+        max_concurrent_processing=_int_env("MAX_CONCURRENT_PROCESSING", 2),
         youtube_client_id=_optional_secret("YOUTUBE_CLIENT_ID"),
         youtube_client_secret=_optional_secret("YOUTUBE_CLIENT_SECRET"),
         youtube_privacy_status=os.getenv("YOUTUBE_PRIVACY_STATUS", "public").strip().lower() or "public",
@@ -306,6 +316,7 @@ def load_settings(env_file: Path | str | None = None) -> Settings:
         youtube_min_score=_int_env("YOUTUBE_MIN_SCORE", 75),
         youtube_daily_limit=_int_env("YOUTUBE_DAILY_LIMIT", 5),
         youtube_tokens_path=_path_env("YOUTUBE_TOKENS_PATH", ".youtube_tokens.json"),
+        max_concurrent_uploads=_int_env("MAX_CONCURRENT_UPLOADS", 3),
         openshorts_docker_image=os.getenv("OPENSHORTS_DOCKER_IMAGE", "liveclipper/openshorts:latest").strip() or "liveclipper/openshorts:latest",
         openshorts_docker_timeout=_float_env("OPENSHORTS_DOCKER_TIMEOUT", 600.0),
         openshorts_subtitle_style=os.getenv("OPENSHORTS_SUBTITLE_STYLE", "bold").strip().lower() or "bold",
@@ -324,4 +335,13 @@ def load_settings(env_file: Path | str | None = None) -> Settings:
         shorts_output_bitrate=os.getenv("SHORTS_OUTPUT_BITRATE", "6M").strip() or "6M",
         shorts_output_crf=_int_env("SHORTS_OUTPUT_CRF", 18),
         youtube_chat_poll_interval=_float_env("YOUTUBE_CHAT_POLL_INTERVAL", 2.0),
+        import_max_clips=_int_env("IMPORT_MAX_CLIPS", 5),
+        import_clip_duration=_float_env("IMPORT_CLIP_DURATION", 55.0),
+        import_skip_intro=_float_env("IMPORT_SKIP_INTRO", 0.0),
+        import_skip_outro=_float_env("IMPORT_SKIP_OUTRO", 0.0),
+        import_download_quality=_int_env("IMPORT_DOWNLOAD_QUALITY", 1080),
+        imports_dir=_path_env("IMPORTS_DIR", "imports"),
     )
+
+
+get_settings = load_settings

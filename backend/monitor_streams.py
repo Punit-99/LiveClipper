@@ -27,11 +27,6 @@ import asyncio
 import sys
 from typing import Any, Callable
 
-from app.auth.user_token import (
-    ReauthRequired,
-    TransientTokenError,
-    get_valid_access_token,
-)
 from app.config import ConfigError, Settings, load_settings
 from app.discovery.stream_finder import DiscoveryError, StreamFinder
 from app.discovery.youtube_finder import YouTubeLiveStream, YouTubeStreamFinder, resolve_channel_name
@@ -293,12 +288,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Disable global disk budget enforcement loop.",
     )
-    # Stage 10 Multi-Platform & Language Filter flags
+    # Platform flag (defaults to youtube)
     parser.add_argument(
         "--platform",
-        choices=["twitch", "youtube", "all"],
-        default=None,
-        help="Platform to monitor: twitch, youtube, or all (default: from MONITOR_PLATFORM env or 'all').",
+        default="youtube",
+        help="Platform to monitor (default: 'youtube').",
     )
     parser.add_argument(
         "--yt-channels",
@@ -347,7 +341,7 @@ def main(
             log.error("Configuration problem: %s", exc)
             return 2
 
-    target_platform = (args.platform or settings.monitor_platform).lower()
+    target_platform = (args.platform or "youtube").lower()
     lang_filter = LanguageFilter(
         target_languages=args.languages or settings.target_languages,
         enabled=not args.no_language_filter and settings.language_filter_enabled,
@@ -364,23 +358,13 @@ def main(
     else:
         log.info("Multi-stream: DISABLED (single stream only)")
 
-    # Fail fast with a friendly message if Twitch login is needed and missing.
-    if target_platform in ("twitch", "all"):
-        check_token = token_checker or get_valid_access_token
+    # Check token if a token checker is supplied (e.g. in test suites)
+    if token_checker is not None:
         try:
-            check_token(settings)
-        except ReauthRequired:
-            if target_platform == "twitch":
-                log.error("You are not logged in to Twitch yet. Run: ./venv/bin/python authorize.py")
-                return 1
-            log.warning("Twitch authentication missing; continuing with YouTube monitoring only.")
-            target_platform = "youtube"
-        except TransientTokenError as exc:
-            if target_platform == "twitch":
-                log.error("Network problem contacting Twitch authentication: %s", exc)
-                return 1
-            log.warning("Transient error contacting Twitch (%s); continuing with YouTube.", exc)
-            target_platform = "youtube"
+            token_checker(settings)
+        except Exception as exc:
+            log.error("Authentication check failed: %s", exc)
+            return 1
 
     # Check recording dependencies if recording is enabled.
     if settings.recording_enabled:
@@ -394,61 +378,59 @@ def main(
     channels: list[str] = []
     custom_sessions: list[StreamSession] = []
 
-    # 1. Resolve Twitch channels if platform is twitch or all
-    if target_platform in ("twitch", "all"):
-        cli_raw: list[str] = list(args.channels)
-        if args.flag_channels:
-            cli_raw.extend(parse_channel_list(args.flag_channels))
+    cli_raw: list[str] = list(args.channels)
+    if args.flag_channels:
+        cli_raw.extend(parse_channel_list(args.flag_channels))
 
-        channels = resolve_target_channels(
-            cli_channels=cli_raw,
-            env_channels=settings.target_channels,
-            combine_env=args.combine_env,
-        )
+    env_target_channels = settings.target_youtube_channels if settings.target_youtube_channels else settings.target_channels
+    resolved_channels = resolve_target_channels(
+        cli_channels=cli_raw,
+        env_channels=env_target_channels,
+        combine_env=args.combine_env,
+    )
 
-        if not is_multi and channels:
-            channels = channels[:1]
+    if not is_multi and resolved_channels:
+        resolved_channels = resolved_channels[:1]
 
-        # Auto-discover Twitch streams if requested
-        if not channels and args.auto_discover:
-            try:
-                finder = stream_finder or StreamFinder(settings)
-                category, streams = finder.discover()
-                if streams:
-                    accepted_tw = []
-                    for s in streams:
-                        ok, detected_lang, reason = lang_filter.is_stream_accepted(
-                            metadata_language=s.language, channel_name=s.channel
-                        )
-                        if ok:
-                            accepted_tw.append(s.channel)
-                        else:
-                            log.info("Language filter skipped Twitch channel #%s (%s)", s.channel, reason)
-                    max_to_pick = effective_max
-                    channels = accepted_tw[:max_to_pick]
-                    log.info(
-                        "Auto-discovered %d live Twitch stream(s) for %r: %s",
-                        len(channels),
-                        category,
-                        ", ".join(f"#{ch}" for ch in channels),
+    channels.extend(resolved_channels)
+
+    # Auto-discover streams if requested and no channels provided
+    if not channels and args.auto_discover:
+        try:
+            finder = stream_finder or StreamFinder(settings)
+            category, streams = finder.discover()
+            if streams:
+                accepted_streams = []
+                for s in streams:
+                    ok, detected_lang, reason = lang_filter.is_stream_accepted(
+                        metadata_language=s.language, channel_name=s.channel
                     )
-                else:
-                    log.error("Twitch auto-discovery found no live streams for category %r.", category)
-                    if target_platform == "twitch":
-                        return 1
-            except DiscoveryError as exc:
-                log.error("Twitch auto-discovery failed: %s", exc)
-                if target_platform == "twitch":
-                    return 1
+                    if ok:
+                        accepted_streams.append(s.channel)
+                    else:
+                        log.info("Language filter skipped channel #%s (%s)", s.channel, reason)
+                channels = accepted_streams[:effective_max]
+                log.info(
+                    "Auto-discovered %d live stream(s) for %r: %s",
+                    len(channels),
+                    category,
+                    ", ".join(f"#{ch}" for ch in channels),
+                )
+            else:
+                log.error("Auto-discovery found no live streams for category %r.", category)
+                return 1
+        except DiscoveryError as exc:
+            log.error("Auto-discovery failed: %s", exc)
+            return 1
 
-    # 2. Resolve YouTube channels if platform is youtube or all
-    if target_platform in ("youtube", "all"):
-        yt_candidates: list[str] = []
-        if args.yt_channels:
-            yt_candidates = [ch.strip() for ch in args.yt_channels.replace(",", " ").split() if ch.strip()]
-        elif settings.target_youtube_channels:
-            yt_candidates = list(settings.target_youtube_channels)
+    # Resolve YouTube channels if yt_channels specified or if no channels provided yet
+    yt_candidates: list[str] = []
+    if args.yt_channels:
+        yt_candidates = [ch.strip() for ch in args.yt_channels.replace(",", " ").split() if ch.strip()]
+    elif not channels and settings.target_youtube_channels:
+        yt_candidates = list(settings.target_youtube_channels)
 
+    if yt_candidates:
         token_mgr = None
         if settings.youtube_tokens_path and settings.youtube_tokens_path.is_file():
             token_mgr = YouTubeTokenManager(

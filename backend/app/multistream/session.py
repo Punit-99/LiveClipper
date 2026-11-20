@@ -37,7 +37,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.analysis.models import AnalyzedHighlight, CompositeHighlightSink
-from app.chat.twitch_chat import ChatMonitor
 from app.config import Settings
 from app.detection import (
     HighlightSink,
@@ -111,12 +110,11 @@ def _default_chat_monitor_factory(
     channel: str,
     pipeline: StreamHighlightDetector,
     print_messages: bool,
-) -> ChatMonitor:
-    return ChatMonitor(
-        settings,
-        channel,
-        pipeline=pipeline,
-        print_messages=print_messages,
+) -> Any:
+    from app.chat.youtube_chat import YouTubeChatMonitor
+    return YouTubeChatMonitor(
+        live_chat_id=channel,
+        detector=pipeline,
     )
 
 
@@ -143,11 +141,11 @@ class StreamSession:
         extractor_process_factory: ExtractorProcessFactory | None = None,
         on_extracted: Callable[[ClipExtractionResult], None] | None = None,
         on_state_change: StateChangeCallback | None = None,
-        platform: str = "twitch",
+        platform: str = "youtube",
         video_id: str | None = None,
         live_chat_id: str | None = None,
     ) -> None:
-        clean_channel = channel.lstrip("#").strip() if platform == "youtube" else normalize_channel(channel)
+        clean_channel = channel.lstrip("#").strip().lower()
         if not clean_channel:
             raise ValueError("channel must be a non-empty Twitch login or YouTube identifier")
         if clip_queue_max_size < 1:
@@ -252,8 +250,6 @@ class StreamSession:
             and self._base_recording_config.clips_output_dir is not None
             else self._settings.clips_output_dir
         )
-        if self._platform == "youtube":
-            return Path(base) / "youtube" / self._channel
         return Path(base) / self._channel
 
     @property

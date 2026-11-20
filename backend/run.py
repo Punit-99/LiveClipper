@@ -147,28 +147,19 @@ def build_command(
         )
 
     if cmd_name == "monitor":
-        # Check platform overrides
+        # Monitor live YouTube streams
         cmd = [py, str(root / "monitor_streams.py")]
-        extra: list[str] = []
-        platform_set = False
+        extra: list[str] = ["--platform", "youtube"]
 
         for a in sub_args:
-            if a in ("--tw", "--twitch") and not platform_set:
-                extra.extend(["--platform", "twitch"])
-                platform_set = True
-            elif a in ("--yt", "--youtube") and not platform_set:
-                extra.extend(["--platform", "youtube"])
-                platform_set = True
-            elif a in ("--all", "-a") and not platform_set:
-                extra.extend(["--platform", "all"])
-                platform_set = True
-            else:
-                extra.append(a)
+            if a in ("--yt", "--youtube"):
+                continue  # Default and only platform
+            extra.append(a)
 
         return CommandPlan(
             command="monitor",
             cmd_args=cmd + extra,
-            description="Monitor live streams with LiveClipper",
+            description="Monitor live YouTube streams with LiveClipper",
             dry_run=dry_run,
         )
 

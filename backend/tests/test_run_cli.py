@@ -18,39 +18,29 @@ class TestRunCLI(unittest.TestCase):
         self.mock_python = Path("/fake/bin/python3")
 
     def test_monitor_routing_and_flags(self) -> None:
-        """Verify monitor routing for default, Twitch, YouTube, and both platforms."""
+        """Verify monitor routing for default and YouTube platform."""
         # Default
         plan = build_command(["monitor"], backend_dir=self.backend_dir, python_bin=self.mock_python)
         self.assertEqual(plan.command, "monitor")
         self.assertFalse(plan.dry_run)
         self.assertEqual(
             plan.cmd_args,
-            [str(self.mock_python), str(self.backend_dir / "monitor_streams.py")],
+            [str(self.mock_python), str(self.backend_dir / "monitor_streams.py"), "--platform", "youtube"],
         )
-
-        # Twitch flag
-        plan_tw = build_command(["monitor", "--tw"], backend_dir=self.backend_dir, python_bin=self.mock_python)
-        self.assertIn("--platform", plan_tw.cmd_args)
-        self.assertIn("twitch", plan_tw.cmd_args)
 
         # YouTube flag
         plan_yt = build_command(["monitor", "--yt"], backend_dir=self.backend_dir, python_bin=self.mock_python)
         self.assertIn("--platform", plan_yt.cmd_args)
         self.assertIn("youtube", plan_yt.cmd_args)
 
-        # Both platforms flag
-        plan_all = build_command(["monitor", "--all"], backend_dir=self.backend_dir, python_bin=self.mock_python)
-        self.assertIn("--platform", plan_all.cmd_args)
-        self.assertIn("all", plan_all.cmd_args)
-
         # Extra args pass-through
         plan_extra = build_command(
-            ["monitor", "--tw", "--channels", "xqc,caedrel"],
+            ["monitor", "--channels", "UCWsDFcIhY2DBi3GB5uykGXA"],
             backend_dir=self.backend_dir,
             python_bin=self.mock_python,
         )
         self.assertIn("--channels", plan_extra.cmd_args)
-        self.assertIn("xqc,caedrel", plan_extra.cmd_args)
+        self.assertIn("UCWsDFcIhY2DBi3GB5uykGXA", plan_extra.cmd_args)
 
     def test_process_routing_and_flags(self) -> None:
         """Verify process routing defaults to openshorts and supports --fast (ffmpeg_fallback)."""
@@ -149,14 +139,14 @@ class TestRunCLI(unittest.TestCase):
         """Verify --dry-run flag is detected, stripped from cmd_args, and help commands resolve properly."""
         # Dry-run flag
         plan_dry = build_command(
-            ["monitor", "--dry-run", "--tw"],
+            ["monitor", "--dry-run", "--yt"],
             backend_dir=self.backend_dir,
             python_bin=self.mock_python,
         )
         self.assertTrue(plan_dry.dry_run)
         self.assertNotIn("--dry-run", plan_dry.cmd_args)
         self.assertIn("--platform", plan_dry.cmd_args)
-        self.assertIn("twitch", plan_dry.cmd_args)
+        self.assertIn("youtube", plan_dry.cmd_args)
 
         # Help commands
         for h_arg in [[], ["help"], ["--help"], ["-h"]]:

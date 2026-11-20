@@ -10,9 +10,16 @@ from pathlib import Path
 from unittest import mock
 
 import monitor_streams
-from app.auth.user_token import ReauthRequired
 from app.config import Settings
 from app.discovery.stream_finder import DiscoveryError, LiveStream
+
+
+class ReauthRequired(Exception):
+    pass
+
+
+class TransientTokenError(Exception):
+    pass
 from app.multistream.disk_budget import BudgetSnapshot, BudgetState
 from app.multistream.liveness import LivenessStatusSnapshot
 from app.multistream.manager import (
@@ -59,6 +66,7 @@ def _dummy_settings(
         max_concurrent_extractions=2,
         liveness_poll_seconds=60.0,
         target_channels=target_channels,
+        target_youtube_channels=(),
         multi_stream_enabled=multi_stream_enabled,
     )
 
@@ -402,7 +410,6 @@ class TestMainExecutionAndExitCodes(unittest.TestCase):
     def test_transient_token_error_exits_1(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             settings = _dummy_settings(Path(tmp))
-            from app.auth.user_token import TransientTokenError
 
             def _network_err(s):
                 raise TransientTokenError("network unreachable")

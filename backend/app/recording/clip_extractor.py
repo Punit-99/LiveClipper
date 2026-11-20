@@ -100,12 +100,7 @@ def build_clip_output_paths(
     ts_label = dt.strftime("%Y%m%d_%H%M%S")
 
     stem = f"{ts_label}_{safe_id}_{safe_category}"
-    if platform and platform.lower() == "youtube":
-        channel_dir = Path(output_dir) / "youtube" / safe_channel
-    elif platform and platform.lower() == "twitch" and (Path(output_dir) / "twitch").is_dir():
-        channel_dir = Path(output_dir) / "twitch" / safe_channel
-    else:
-        channel_dir = Path(output_dir) / safe_channel
+    channel_dir = Path(output_dir) / safe_channel
     return channel_dir / f"{stem}.mp4", channel_dir / f"{stem}.json"
 
 

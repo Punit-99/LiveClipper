@@ -183,6 +183,7 @@ class ShortsPipeline:
         self.settings = settings or load_settings()
         self.clips_dir = Path(clips_dir) if clips_dir else self.settings.clips_output_dir
         self.shorts_dir = Path(shorts_dir) if shorts_dir else self.settings.shorts_output_dir
+        self.imports_dir = Path(getattr(self.settings, "imports_dir", self.clips_dir.parent / "imports"))
 
         self.manifest = manifest or ShortsManifest(self.shorts_dir / "manifest.jsonl")
 
@@ -243,6 +244,11 @@ class ShortsPipeline:
             clip_files.extend(self.clips_dir.glob("*/*.mp4"))
             clip_files.extend(self.clips_dir.glob("*.mp4"))
 
+        # Also scan imported clips directory (e.g. imports/<video_id>/clips/*.mp4)
+        if self.imports_dir.is_dir():
+            clip_files.extend(self.imports_dir.glob("*/*/*.mp4"))
+            clip_files.extend(self.imports_dir.glob("*/*.mp4"))
+
         seen_paths: set[Path] = set()
         deduped_files: list[Path] = []
         for cf in clip_files:
@@ -277,12 +283,19 @@ class ShortsPipeline:
             title = analysis.get("title") or "Stream Highlight"
             category = analysis.get("category") or "highlight"
 
-            platform = sidecar_data.get("platform")
-            if not platform:
-                if clip_file.parent.parent.name in ("twitch", "youtube"):
-                    platform = clip_file.parent.parent.name
-                else:
-                    platform = "twitch"
+            is_imported = bool(sidecar_data.get("is_imported") or sidecar_data.get("source_type") == "imported" or clip_file.stem.startswith("imp_"))
+            source_type = "imported" if is_imported else "live"
+            if is_imported:
+                platform = "youtube"
+                score = int(sidecar_data.get("score") or analysis.get("highlight_score", 0))
+                title = sidecar_data.get("suggested_title") or sidecar_data.get("title") or analysis.get("title") or "Imported Highlight"
+            else:
+                platform = sidecar_data.get("platform")
+                if not platform:
+                    if clip_file.parent.parent.name in ("twitch", "youtube"):
+                        platform = clip_file.parent.parent.name
+                    else:
+                        platform = "youtube"
 
             existing = self.manifest.get(clip_id)
             if existing is None:
@@ -296,16 +309,20 @@ class ShortsPipeline:
                     title=title,
                     category=category,
                     state=STATE_DISCOVERED,
+                    is_imported=is_imported,
+                    source_type=source_type,
                 )
             else:
                 record = existing
                 # If file paths changed, update them
-                if record.get("source_clip_path") != str(clip_file.resolve()) or not record.get("platform"):
+                if record.get("source_clip_path") != str(clip_file.resolve()) or not record.get("platform") or record.get("is_imported") != is_imported:
                     record = self.manifest.update_record(
                         clip_id=clip_id,
                         platform=platform,
                         source_clip_path=str(clip_file.resolve()),
                         source_sidecar_path=str(sidecar_path.resolve()) if sidecar_path.is_file() else None,
+                        is_imported=is_imported,
+                        source_type=source_type,
                     )
 
             discovered.append(record)
@@ -487,6 +504,7 @@ class ShortsPipeline:
         clip_id: str | None = None,
         prompt_fn: Callable[[dict[str, Any]], str] | None = None,
         title_prompt_fn: Callable[[dict[str, Any], list[dict[str, str]]], str] | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> dict[str, Any]:
         """Upload eligible shorts to YouTube Shorts respecting quota limits."""
         if not self.uploader:
@@ -666,6 +684,7 @@ class ShortsPipeline:
                     sidecar_path=target_sidecar_path,
                     sidecar_data=sidecar_data,
                     privacy_status=privacy,
+                    progress_callback=progress_callback,
                 )
                 yt_id = upload_res.get("video_id")
                 yt_url = upload_res.get("url")

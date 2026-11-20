@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.api.events import ws_manager
@@ -13,6 +13,8 @@ from app.api.state import get_quota_tracker, get_shorts_pipeline
 from app.config import load_settings
 from app.logging_setup import get_logger
 from app.shorts.pipeline import STATE_PROCESSED, STATE_UPLOADED
+from app.shorts.queue_manager import get_upload_queue
+from app.shorts.youtube_uploader import QuotaExceededError
 
 log = get_logger(__name__)
 
@@ -321,9 +323,36 @@ def reupload_single_short(clip_id: str, req: SingleUploadRequest | None = None) 
         ) from exc
 
 
+@router.get("/upload/queue")
+def get_upload_queue_status() -> dict[str, Any]:
+    """Return the current YouTube upload queue status."""
+    settings = load_settings()
+    tracker = get_quota_tracker(settings=settings)
+    queue = get_upload_queue(max_concurrent=settings.max_concurrent_uploads, quota_tracker=tracker)
+    return queue.get_status()
+
+
+@router.post("/upload/{clip_id}/cancel")
+def cancel_upload(clip_id: str) -> dict[str, Any]:
+    """Cancel a queued upload before transmission begins."""
+    settings = load_settings()
+    tracker = get_quota_tracker(settings=settings)
+    queue = get_upload_queue(max_concurrent=settings.max_concurrent_uploads, quota_tracker=tracker)
+    success, msg = queue.cancel(clip_id)
+    if not success:
+        if "already" in msg:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=msg)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=msg)
+    return {"status": "cancelled", "clip_id": clip_id, "message": msg}
+
+
 @router.post("/upload/{clip_id}")
-def upload_single_short(clip_id: str, req: SingleUploadRequest | None = None) -> dict[str, Any]:
-    """Upload a specific processed Short to YouTube."""
+def upload_single_short(
+    clip_id: str,
+    background_tasks: BackgroundTasks,
+    req: SingleUploadRequest | None = None,
+) -> dict[str, Any]:
+    """Upload a specific processed Short to YouTube concurrently via background queue."""
     payload = req or SingleUploadRequest()
     settings = load_settings()
     pipeline = get_shorts_pipeline(settings=settings)
@@ -334,58 +363,99 @@ def upload_single_short(clip_id: str, req: SingleUploadRequest | None = None) ->
             detail="YouTube uploader is not configured. Add YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET to .env or authenticate first.",
         )
 
-    # If title override is given, update record in manifest first
+    tracker = pipeline.uploader.quota_tracker or get_quota_tracker(settings=settings)
+    allowed, reason = tracker.can_upload()
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=reason,
+        )
+
+    # Find record and title
+    record = pipeline.manifest.get(clip_id)
+    if not record:
+        for r in pipeline.manifest.all_records():
+            if (
+                r.get("youtube_video_id") == clip_id
+                or r.get("youtube_id") == clip_id
+                or r.get("upload", {}).get("video_id") == clip_id
+            ):
+                record = r
+                break
+
+    cid = record.get("clip_id") if record else clip_id
     if payload.selected_title:
-        pipeline.manifest.update_record(clip_id=clip_id, selected_viral_title=payload.selected_title)
+        pipeline.manifest.update_record(clip_id=cid, selected_viral_title=payload.selected_title)
 
-    privacy = payload.privacy_status or settings.youtube_privacy_status
+    chosen_title = payload.selected_title or (record.get("selected_viral_title") if record else None) or (record.get("title") if record else None) or f"Short {cid}"
+    privacy = payload.privacy_status or (record.get("privacy_status") if record else None) or settings.youtube_privacy_status
 
-    ws_manager.broadcast_sync("upload_started", {"clip_id": clip_id})
+    queue = get_upload_queue(max_concurrent=settings.max_concurrent_uploads, quota_tracker=tracker)
 
-    try:
+    def do_upload():
+        def on_upload_progress(bytes_sent: int, total_bytes: int) -> None:
+            queue.report_progress(cid, bytes_sent, total_bytes)
+
         summary = pipeline.upload_shorts(
-            clip_id=clip_id,
+            clip_id=cid,
             auto_upload=True,
             interactive=False,
             privacy_status=privacy,
+            progress_callback=on_upload_progress,
         )
 
         items = summary.get("items", [])
         uploaded_item = items[0] if items else None
-
         if summary.get("uploaded", 0) > 0 and uploaded_item:
-            ws_manager.broadcast_sync("upload_complete", {
-                "clip_id": clip_id,
-                "youtube_url": uploaded_item.get("youtube_url"),
-                "youtube_id": uploaded_item.get("youtube_id"),
-                "title": uploaded_item.get("title"),
-            })
-            return {"status": "uploaded", "short": uploaded_item, "summary": summary}
+            pipeline.manifest.update_record(
+                clip_id=cid,
+                state=STATE_UPLOADED,
+                youtube_verified=True,
+                youtube_verified_at=datetime.now(timezone.utc).isoformat(),
+                youtube_verify_reason=None,
+                youtube_status=privacy,
+            )
+            return uploaded_item
 
-        error_msg = "Short could not be uploaded"
+        err = "Upload failed"
         if summary.get("rejected", 0) > 0:
-            error_msg = "Short was rejected by quota or score policy"
+            err = "Upload was rejected by quota or score policy"
         elif summary.get("skipped", 0) > 0:
-            error_msg = "Short was skipped (missing video or not found)"
+            err = "Upload was skipped (missing video or not found)"
         elif summary.get("failed", 0) > 0:
-            error_msg = "Upload failed during transmission"
+            err = "Upload failed during transmission"
+        raise RuntimeError(err)
 
+    try:
+        item, is_active = queue.enqueue(cid, chosen_title, do_upload)
+    except QuotaExceededError as q_err:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=error_msg,
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Upload failed: {exc}",
-        ) from exc
+            detail=str(q_err),
+        ) from q_err
+
+    if is_active:
+        background_tasks.add_task(queue.run_item, cid)
+        return {
+            "status": "uploading",
+            "clip_id": cid,
+            "title": chosen_title,
+        }
+    else:
+        return {
+            "status": "queued",
+            "clip_id": cid,
+            "position": item.position,
+            "title": chosen_title,
+        }
 
 
 @router.post("/upload/auto")
-def auto_upload_shorts(req: AutoUploadRequest | None = None) -> dict[str, Any]:
-    """Auto-upload all eligible Shorts meeting the highlight score threshold."""
+def auto_upload_shorts(
+    background_tasks: BackgroundTasks,
+    req: AutoUploadRequest | None = None,
+) -> dict[str, Any]:
+    """Auto-upload all eligible Shorts meeting the score threshold concurrently via queue."""
     payload = req or AutoUploadRequest()
     settings = load_settings()
     pipeline = get_shorts_pipeline(settings=settings)
@@ -396,24 +466,97 @@ def auto_upload_shorts(req: AutoUploadRequest | None = None) -> dict[str, Any]:
             detail="YouTube uploader is not configured. Add YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET to .env or authenticate first.",
         )
 
+    tracker = pipeline.uploader.quota_tracker or get_quota_tracker(settings=settings)
+    allowed, reason = tracker.can_upload()
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=reason,
+        )
+
     min_score = payload.min_score if payload.min_score is not None else settings.youtube_min_score
     privacy = payload.privacy_status or settings.youtube_privacy_status
 
-    ws_manager.broadcast_sync("batch_upload_started", {"min_score": min_score, "channel": payload.channel})
+    # Discover eligible candidates in PROCESSED state
+    all_records = pipeline.manifest.all_records()
+    candidates: list[dict[str, Any]] = []
+    for r in all_records:
+        if r.get("state") == STATE_PROCESSED:
+            sc = r.get("highlight_score", 0)
+            if sc >= min_score:
+                if not payload.channel or r.get("channel") == payload.channel:
+                    candidates.append(r)
 
-    try:
-        summary = pipeline.upload_shorts(
-            channel=payload.channel,
-            min_score=min_score,
-            auto_upload=True,
-            interactive=False,
-            privacy_status=privacy,
-        )
+    if not candidates:
+        return {
+            "status": "queued",
+            "total": 0,
+            "uploading": 0,
+            "queued": 0,
+            "items": [],
+        }
 
-        ws_manager.broadcast_sync("batch_upload_complete", summary)
-        return summary
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Batch upload failed: {exc}",
-        ) from exc
+    queue = get_upload_queue(max_concurrent=settings.max_concurrent_uploads, quota_tracker=tracker)
+
+    uploading_count = 0
+    queued_count = 0
+    items_info: list[dict[str, Any]] = []
+
+    for cand in candidates:
+        cid = cand.get("clip_id")
+        title = cand.get("selected_viral_title") or cand.get("title") or f"Short {cid}"
+
+        def make_worker(target_cid=cid):
+            def worker():
+                def on_progress(bytes_sent: int, total_bytes: int) -> None:
+                    queue.report_progress(target_cid, bytes_sent, total_bytes)
+
+                summary = pipeline.upload_shorts(
+                    clip_id=target_cid,
+                    auto_upload=True,
+                    interactive=False,
+                    privacy_status=privacy,
+                    progress_callback=on_progress,
+                )
+                items = summary.get("items", [])
+                uploaded_item = items[0] if items else None
+                if summary.get("uploaded", 0) > 0 and uploaded_item:
+                    pipeline.manifest.update_record(
+                        clip_id=target_cid,
+                        state=STATE_UPLOADED,
+                        youtube_verified=True,
+                        youtube_verified_at=datetime.now(timezone.utc).isoformat(),
+                        youtube_verify_reason=None,
+                        youtube_status=privacy,
+                    )
+                    return uploaded_item
+
+                err = "Batch upload failed"
+                if summary.get("rejected", 0) > 0:
+                    err = "Upload rejected by quota"
+                elif summary.get("failed", 0) > 0:
+                    err = "Upload failed during transmission"
+                raise RuntimeError(err)
+
+            return worker
+
+        try:
+            item, is_active = queue.enqueue(cid, title, make_worker())
+        except QuotaExceededError:
+            break
+
+        if is_active:
+            uploading_count += 1
+            background_tasks.add_task(queue.run_item, cid)
+        else:
+            queued_count += 1
+
+        items_info.append(item.to_dict())
+
+    return {
+        "status": "queued",
+        "total": len(items_info),
+        "uploading": uploading_count,
+        "queued": queued_count,
+        "items": items_info,
+    }

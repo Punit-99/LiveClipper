@@ -158,6 +158,18 @@ class YouTubeLiveStream:
     language: str | None = None
     platform: str = "youtube"
 
+    @property
+    def channel(self) -> str:
+        return self.channel_id or self.channel_name
+
+    @property
+    def title(self) -> str:
+        return self.stream_title
+
+    @property
+    def display_name(self) -> str:
+        return self.channel_name
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "channel_id": self.channel_id,

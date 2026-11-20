@@ -176,6 +176,40 @@ export async function fetchQuota() {
   return res.json();
 }
 
+export async function fetchProcessingQueue() {
+  const res = await fetch(`${API_BASE}/shorts/queue`);
+  if (!res.ok) throw new Error(`Processing queue fetch failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function cancelProcessing(clipId) {
+  const res = await fetch(`${API_BASE}/shorts/${clipId}/cancel`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Cancel processing failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function fetchUploadQueue() {
+  const res = await fetch(`${API_BASE}/upload/queue`);
+  if (!res.ok) throw new Error(`Upload queue fetch failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function cancelUpload(clipId) {
+  const res = await fetch(`${API_BASE}/upload/${clipId}/cancel`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Cancel upload failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function fetchSettings() {
   const res = await fetch(`${API_BASE}/settings`);
   if (!res.ok) throw new Error(`Settings fetch failed: ${res.statusText}`);
@@ -298,6 +332,10 @@ export function formatDateTime(isoString) {
   }
 }
 
+export function formatRecordedDate(isoString) {
+  return formatDateTime(isoString);
+}
+
 export function formatRelativeTime(isoString) {
   if (!isoString) return '';
   try {
@@ -318,4 +356,70 @@ export function formatRelativeTime(isoString) {
     return '';
   }
 }
+
+// --- Import (YouTube Video Clipper) API functions ---
+
+export async function fetchVideoInfo(url) {
+  const query = new URLSearchParams({ url });
+  const res = await fetch(`${API_BASE}/import/info?${query.toString()}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to fetch video info: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function startImportAnalysis(payload) {
+  const res = await fetch(`${API_BASE}/import/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Import analysis failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function fetchImportJobs() {
+  const res = await fetch(`${API_BASE}/import/jobs`);
+  if (!res.ok) throw new Error(`Failed to fetch import jobs: ${res.statusText}`);
+  return res.json();
+}
+
+export async function fetchImportJob(jobId) {
+  const res = await fetch(`${API_BASE}/import/jobs/${jobId}`);
+  if (!res.ok) throw new Error(`Failed to fetch import job: ${res.statusText}`);
+  return res.json();
+}
+
+export async function fetchImportedClips() {
+  const res = await fetch(`${API_BASE}/import/clips`);
+  if (!res.ok) throw new Error(`Failed to fetch imported clips: ${res.statusText}`);
+  return res.json();
+}
+
+export async function deleteImportedClip(clipId) {
+  const res = await fetch(`${API_BASE}/import/clips/${clipId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to delete imported clip: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function processImportedClip(clipId) {
+  const res = await fetch(`${API_BASE}/import/clips/${clipId}/process`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to process imported clip: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 

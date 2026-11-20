@@ -65,6 +65,18 @@ def transcribe_media(
         raise TranscriptionError(f"Media has no audio stream: {path}")
 
     try:
+        import av
+        if hasattr(av, "open") and not getattr(av.open, "_patched_metadata_errors", False):
+            _orig_av_open = av.open
+            def _safe_av_open(*args, **kwargs):
+                kwargs.pop("metadata_errors", None)
+                return _orig_av_open(*args, **kwargs)
+            _safe_av_open._patched_metadata_errors = True
+            av.open = _safe_av_open
+    except Exception:
+        pass
+
+    try:
         from faster_whisper import WhisperModel
     except ImportError as exc:
         raise TranscriptionError(
@@ -72,9 +84,20 @@ def transcribe_media(
             "install faster-whisper: pip install faster-whisper"
         ) from exc
 
-    log.info("Transcribing media with faster-whisper (model=%s, device=%s): %s", model_size, device, path.name)
+    # Check for local pre-downloaded model weights to avoid blocking on network/HF Hub
+    backend_root = Path(__file__).resolve().parent.parent.parent
+    local_named = backend_root / "models" / f"whisper-{model_size}"
+    local_tiny = backend_root / "models" / "whisper-tiny"
+    if local_named.is_dir():
+        model_identifier = str(local_named)
+    elif local_tiny.is_dir():
+        model_identifier = str(local_tiny)
+    else:
+        model_identifier = model_size
 
-    model = WhisperModel(model_size, device=device, compute_type=compute_type)
+    log.info("Transcribing media with faster-whisper (model=%s, device=%s): %s", model_identifier, device, path.name)
+
+    model = WhisperModel(model_identifier, device=device, compute_type=compute_type)
     segments, info = model.transcribe(
         str(path),
         beam_size=5,

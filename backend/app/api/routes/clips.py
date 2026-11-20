@@ -22,25 +22,31 @@ router = APIRouter(tags=["Clips"])
 
 
 def _find_clip_file_by_id(clips_dir: Path, clip_id: str) -> tuple[Path | None, Path | None]:
-    """Search clips directory for an mp4 file and matching json sidecar containing clip_id."""
+    """Search clips directory and imports directory for an mp4 file and matching json sidecar containing clip_id."""
     clean_id = clip_id.lower().strip()
-    for mp4_path in clips_dir.rglob("*.mp4"):
-        if clean_id in mp4_path.stem.lower():
-            json_path = mp4_path.with_suffix(".json")
-            return mp4_path, json_path if json_path.is_file() else None
+    search_dirs = [clips_dir]
+    imports_dir = clips_dir.parent / "imports"
+    if imports_dir.is_dir():
+        search_dirs.append(imports_dir)
 
-    # Also search by reading JSON sidecars directly if stem didn't match
-    for json_path in clips_dir.rglob("*.json"):
-        try:
-            with open(json_path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            event_id = str(data.get("event_id") or "")
-            if event_id.lower().startswith(clean_id) or data.get("clip_id") == clean_id:
-                mp4_candidate = json_path.with_suffix(".mp4")
-                if mp4_candidate.is_file():
-                    return mp4_candidate, json_path
-        except Exception:
-            continue
+    for search_dir in search_dirs:
+        for mp4_path in search_dir.rglob("*.mp4"):
+            if clean_id in mp4_path.stem.lower():
+                json_path = mp4_path.with_suffix(".json")
+                return mp4_path, json_path if json_path.is_file() else None
+
+        # Also search by reading JSON sidecars directly if stem didn't match
+        for json_path in search_dir.rglob("*.json"):
+            try:
+                with open(json_path, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                event_id = str(data.get("event_id") or "")
+                if event_id.lower().startswith(clean_id) or data.get("clip_id") == clean_id:
+                    mp4_candidate = json_path.with_suffix(".mp4")
+                    if mp4_candidate.is_file():
+                        return mp4_candidate, json_path
+            except Exception:
+                continue
 
     return None, None
 

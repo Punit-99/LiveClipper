@@ -89,11 +89,17 @@ def get_settings() -> dict[str, Any]:
         "youtube_min_score": int(env_raw.get("YOUTUBE_MIN_SCORE") or cfg.youtube_min_score),
         "youtube_daily_limit": int(env_raw.get("YOUTUBE_DAILY_LIMIT") or cfg.youtube_daily_limit),
         "youtube_auto_upload": env_raw.get("YOUTUBE_AUTO_UPLOAD", "false").lower() == "true",
+        "max_concurrent_uploads": int(env_raw.get("MAX_CONCURRENT_UPLOADS") or cfg.max_concurrent_uploads),
+        "max_concurrent_processing": int(env_raw.get("MAX_CONCURRENT_PROCESSING") or cfg.max_concurrent_processing),
         "viral_metadata_enabled": env_raw.get("VIRAL_METADATA_ENABLED", "true").lower() == "true",
         "gemini_model": env_raw.get("GEMINI_MODEL") or cfg.gemini_model,
         "has_gemini_key": bool(cfg.gemini_api_key),
         "has_youtube_credentials": bool(cfg.youtube_client_id and cfg.youtube_client_secret),
-        "has_twitch_credentials": bool(cfg.client_id and cfg.client_secret),
+        "import_max_clips": int(env_raw.get("IMPORT_MAX_CLIPS") or cfg.import_max_clips),
+        "import_clip_duration": float(env_raw.get("IMPORT_CLIP_DURATION") or cfg.import_clip_duration),
+        "import_skip_intro": float(env_raw.get("IMPORT_SKIP_INTRO") or cfg.import_skip_intro),
+        "import_skip_outro": float(env_raw.get("IMPORT_SKIP_OUTRO") or cfg.import_skip_outro),
+        "import_download_quality": int(env_raw.get("IMPORT_DOWNLOAD_QUALITY") or cfg.import_download_quality),
     }
 
 
@@ -122,9 +128,16 @@ def update_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "youtube_min_score": "YOUTUBE_MIN_SCORE",
         "youtube_daily_limit": "YOUTUBE_DAILY_LIMIT",
         "youtube_auto_upload": "YOUTUBE_AUTO_UPLOAD",
+        "max_concurrent_uploads": "MAX_CONCURRENT_UPLOADS",
+        "max_concurrent_processing": "MAX_CONCURRENT_PROCESSING",
         "viral_metadata_enabled": "VIRAL_METADATA_ENABLED",
         "gemini_model": "GEMINI_MODEL",
         "gemini_api_key": "GEMINI_API_KEY",
+        "import_max_clips": "IMPORT_MAX_CLIPS",
+        "import_clip_duration": "IMPORT_CLIP_DURATION",
+        "import_skip_intro": "IMPORT_SKIP_INTRO",
+        "import_skip_outro": "IMPORT_SKIP_OUTRO",
+        "import_download_quality": "IMPORT_DOWNLOAD_QUALITY",
     }
 
     env_updates: dict[str, str] = {}

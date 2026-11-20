@@ -46,7 +46,7 @@ class OpenShortsBridge:
         docker_image: str = "liveclipper/openshorts:latest",
         docker_timeout: float = 600.0,
         subtitle_style: str = "bold",
-        reframe_mode: str = "auto",
+        reframe_mode: str = "split",
         output_bitrate: str = "6M",
         output_crf: int = 18,
         hook_overlay_enabled: bool = False,
@@ -68,13 +68,13 @@ class OpenShortsBridge:
         self.hook_overlay_enabled = bool(hook_overlay_enabled)
 
     def is_docker_available(self) -> bool:
-        """Check if Docker CLI is installed and running."""
+        """Check if Docker CLI is installed and the target image exists locally."""
         docker_path = shutil.which("docker")
         if not docker_path:
             return False
         try:
             res = subprocess.run(
-                ["docker", "--version"],
+                ["docker", "image", "inspect", self.docker_image],
                 capture_output=True,
                 text=True,
                 timeout=5.0,
@@ -282,7 +282,7 @@ class OpenShortsBridge:
         Applies:
         - Scaled & blurred 9:16 background filler from the 16:9 source.
         - Sharp 16:9 foreground video centered vertically.
-        - Hook banner title overlay for the first 4.0 seconds.
+        - Hook banner title overlay for the first 4.0 seconds (if hook_overlay_enabled).
         """
         if progress_callback:
             try:
@@ -526,11 +526,13 @@ class OpenShortsBridge:
                 ass_path = temp_dir / "captions.ass"
                 preset = CAPTION_PRESETS.get(self.subtitle_style, AUTO_CAPTION_STYLE)
                 dur = probe_video_duration(framed_path)
+                sub_alignment = "middle" if self.reframe_mode == "split" else "bottom"
                 generate_ass(
                     transcript=transcript,
                     clip_start=0.0,
                     clip_end=dur,
                     output_path=ass_path,
+                    alignment=sub_alignment,
                     fontsize=preset.get("font_size", 40),
                     font_name=preset.get("font_name", "Anton"),
                     font_color=preset.get("font_color", "#FFFFFF"),

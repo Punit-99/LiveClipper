@@ -30,9 +30,44 @@ from app.analysis.models import (
     JsonlAnalysisSink,
 )
 from app.analysis.worker import HighlightAnalysisWorker
-from app.auth import user_token
-from app.chat.twitch_chat import ChatMonitor
 from app.config import Settings
+
+
+class user_token:
+    class TransientTokenError(Exception):
+        pass
+
+    class ReauthRequired(Exception):
+        pass
+
+    _TOKENS_PATH = None
+
+    @staticmethod
+    def _save_tokens(*args, **kwargs):
+        pass
+
+    @staticmethod
+    def get_valid_access_token(*args, **kwargs):
+        return "tok"
+
+    @staticmethod
+    async def get_valid_access_token_async(*args, **kwargs):
+        return "tok"
+
+    @staticmethod
+    async def force_refresh_async(*args, **kwargs):
+        return "tok"
+
+
+class ChatMonitor:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def start(self):
+        pass
+
+    async def aclose(self):
+        pass
 from app.detection.highlight_event import ChatMessage, DetectionSignals, HighlightEvent
 from app.recording import (
     ClipExtractionResult,
@@ -113,6 +148,7 @@ def _ok_analysis(event: HighlightEvent) -> AnalyzedHighlight:
     )
 
 
+@unittest.skip("Twitch removed in Part 11")
 class TestOAuthConcurrencyAndTransientErrors(unittest.IsolatedAsyncioTestCase):
     async def test_sync_and_async_refresh_share_lock_and_do_not_block_event_loop(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -316,6 +352,7 @@ class _FakeWebSocket:
         await self.close()
 
 
+@unittest.skip("Twitch removed in Part 11")
 class TestIndependentChatLifecycle(unittest.IsolatedAsyncioTestCase):
     async def test_stopping_one_chat_monitor_does_not_affect_other_and_quiet_mode_suppresses_stdout(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -725,6 +762,7 @@ class TestSharedExtractionSemaphoreAndProcessTreeCleanup(unittest.IsolatedAsynci
 class TestStage611Hardening(unittest.IsolatedAsyncioTestCase):
     """Targeted Stage 6.1.1 audit-fix regression tests."""
 
+    @unittest.skip("Twitch removed in Part 11")
     def test_token_rotation_persists_rotated_refresh_token_when_validate_fails_transiently(self):
         with tempfile.TemporaryDirectory() as tmp:
             tokens_file = Path(tmp) / ".tokens.json"
@@ -779,6 +817,7 @@ class TestStage611Hardening(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(tok["scopes"], ["chat:read", "clips:edit"])
                 self.assertEqual(m_post.call_count, 1)
 
+    @unittest.skip("Twitch removed in Part 11")
     def test_validation_http_4xx_clears_tokens_and_raises_reauth_required(self):
         with tempfile.TemporaryDirectory() as tmp:
             tokens_file = Path(tmp) / ".tokens.json"
@@ -813,6 +852,7 @@ class TestStage611Hardening(unittest.IsolatedAsyncioTestCase):
                     user_token.get_valid_access_token(settings)
                 self.assertFalse(tokens_file.exists())
 
+    @unittest.skip("Twitch removed in Part 11")
     def test_concurrent_async_oauth_calls_from_separate_event_loop_threads(self):
         with tempfile.TemporaryDirectory() as tmp:
             tokens_file = Path(tmp) / ".tokens.json"
@@ -1077,6 +1117,7 @@ class TestStage611Hardening(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("q-s2", "shutdown_drain_timeout"), drop_calls)
         self.assertIn(("q-s3", "shutdown_drain_timeout"), drop_calls)
 
+    @unittest.skip("Twitch removed in Part 11")
     async def test_chat_aclose_during_websocket_handshake_exits_cleanly_without_sending_irc(self):
         with tempfile.TemporaryDirectory() as tmp:
             settings = _settings(Path(tmp))
@@ -1144,6 +1185,7 @@ class TestStage611Hardening(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(aexit_called)
             self.assertEqual(sent, [])
 
+    @unittest.skip("Twitch removed in Part 11")
     async def test_chat_aclose_interrupts_reconnect_backoff_sleep_and_recovers_from_transient_token_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             settings = _settings(Path(tmp))
