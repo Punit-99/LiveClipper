@@ -165,17 +165,47 @@ def list_library_videos() -> list[dict[str, Any]]:
     return [item.to_dict() for item in service.list_library()]
 
 
-@router.get("/library/{video_id}/thumbnail")
+@router.api_route("/library/{video_id}/thumbnail", methods=["GET", "HEAD"])
 def get_library_thumbnail(video_id: str):
     """Serve thumbnail JPEG for a video in the library."""
+    clean_id = video_id.replace(".jpg", "").strip()
     service = get_clipper_service()
-    thumb_path = service.imports_dir / video_id / "thumbnail.jpg"
+    thumb_path = service.imports_dir / clean_id / "thumbnail.jpg"
     if not thumb_path.is_file():
+        # Fallback search
+        for p in (service.imports_dir / clean_id).rglob("*.jpg"):
+            if p.is_file():
+                thumb_path = p
+                break
+
+    if not thumb_path or not thumb_path.is_file():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Thumbnail for video '{video_id}' not found.",
         )
-    return FileResponse(path=thumb_path, media_type="image/jpeg", filename=f"{video_id}.jpg")
+    return FileResponse(path=thumb_path, media_type="image/jpeg", filename=f"{clean_id}.jpg")
+
+
+@router.api_route("/library/{video_id}/preview", methods=["GET", "HEAD"])
+def preview_library_video(video_id: str, request: Request):
+    """Stream library source video with HTTP Range support."""
+    clean_id = video_id.replace(".mp4", "").strip()
+    service = get_clipper_service()
+    item = service.get_library_item(clean_id)
+    source_path = None
+    if item and Path(item.source_path).is_file():
+        source_path = Path(item.source_path)
+    else:
+        cand = service.imports_dir / clean_id / "source.mp4"
+        if cand.is_file():
+            source_path = cand
+
+    if not source_path or not source_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Library video '{video_id}' not found.",
+        )
+    return range_stream_response(source_path, request, media_type="video/mp4")
 
 
 @router.delete("/library/{video_id}")
@@ -280,35 +310,57 @@ def clear_all_imported_clips(confirm: bool = Query(False, description="Confirm d
     return service.cleanup_all_imports()
 
 
-@router.get("/clips/{clip_id}/preview")
-async def preview_imported_clip(clip_id: str, request: Request):
+@router.api_route("/clips/{clip_id}/preview", methods=["GET", "HEAD"])
+def preview_imported_clip(clip_id: str, request: Request):
     """Stream imported clip video with HTTP Range support."""
+    clean_id = clip_id.replace(".mp4", "").strip()
     service = get_clipper_service()
-    clip = service.get_clip(clip_id)
-    if not clip or not Path(clip.file_path).is_file():
+    clip = service.get_clip(clean_id)
+    target_path = None
+    if clip and clip.file_path and Path(clip.file_path).is_file():
+        target_path = Path(clip.file_path)
+    else:
+        # Fallback to direct search in imports directory
+        for p in service.imports_dir.rglob(f"*{clean_id}*.mp4"):
+            if p.is_file():
+                target_path = p
+                break
+
+    if not target_path or not target_path.is_file():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Imported clip video '{clip_id}' not found.",
         )
 
-    return await range_stream_response(Path(clip.file_path), request)
+    return range_stream_response(target_path, request, media_type="video/mp4")
 
 
-@router.get("/clips/{clip_id}/thumbnail")
+@router.api_route("/clips/{clip_id}/thumbnail", methods=["GET", "HEAD"])
 def get_imported_clip_thumbnail(clip_id: str):
     """Retrieve JPEG snapshot thumbnail for an imported clip."""
+    clean_id = clip_id.replace(".jpg", "").replace(".mp4", "").strip()
     service = get_clipper_service()
-    clip = service.get_clip(clip_id)
-    if not clip or not clip.thumbnail_path or not Path(clip.thumbnail_path).is_file():
+    clip = service.get_clip(clean_id)
+    thumb_path = None
+    if clip and clip.thumbnail_path and Path(clip.thumbnail_path).is_file():
+        thumb_path = Path(clip.thumbnail_path)
+    else:
+        # Fallback to direct search in imports directory
+        for p in service.imports_dir.rglob(f"*{clean_id}*.jpg"):
+            if p.is_file():
+                thumb_path = p
+                break
+
+    if not thumb_path or not thumb_path.is_file():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Thumbnail for clip '{clip_id}' not found.",
         )
 
     return FileResponse(
-        path=clip.thumbnail_path,
+        path=str(thumb_path),
         media_type="image/jpeg",
-        filename=f"{clip_id}.jpg",
+        filename=f"{clean_id}.jpg",
     )
 
 

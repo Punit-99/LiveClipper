@@ -67,9 +67,10 @@ def generate_video_thumbnail(video_path: Path, thumb_path: Path, offset_sec: flo
 class ClipperService:
     """Manages YouTube URL analysis, library storage, background jobs, and clip persistence."""
 
-    def __init__(self, imports_dir: Path | None = None) -> None:
+    def __init__(self, imports_dir: Path | str | None = None) -> None:
         settings = get_settings()
-        self.imports_dir = imports_dir or getattr(settings, "imports_dir", Path(__file__).resolve().parents[2] / "imports")
+        raw_dir = imports_dir or getattr(settings, "imports_dir", Path(__file__).resolve().parents[2] / "imports")
+        self.imports_dir = Path(raw_dir)
         self.imports_dir.mkdir(parents=True, exist_ok=True)
         self.manifest_path = self.imports_dir / "manifest.json"
         self._jobs: dict[str, ImportJob] = {}

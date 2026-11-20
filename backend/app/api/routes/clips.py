@@ -25,7 +25,7 @@ router = APIRouter(tags=["Clips"])
 
 def _find_clip_file_by_id(clips_dir: Path, clip_id: str) -> tuple[Path | None, Path | None]:
     """Search clips directory and imports directory for an mp4 file and matching json sidecar containing clip_id."""
-    clean_id = clip_id.lower().strip()
+    clean_id = clip_id.lower().replace(".mp4", "").replace(".jpg", "").strip()
     search_dirs = [clips_dir]
     imports_dir = clips_dir.parent / "imports"
     if imports_dir.is_dir():
@@ -33,7 +33,8 @@ def _find_clip_file_by_id(clips_dir: Path, clip_id: str) -> tuple[Path | None, P
 
     for search_dir in search_dirs:
         for mp4_path in search_dir.rglob("*.mp4"):
-            if clean_id in mp4_path.stem.lower():
+            stem_lower = mp4_path.stem.lower()
+            if clean_id in stem_lower or stem_lower in clean_id:
                 json_path = mp4_path.with_suffix(".json")
                 return mp4_path, json_path if json_path.is_file() else None
 
@@ -162,7 +163,7 @@ def preview_clip(clip_id: str, request: Request) -> Any:
     return range_stream_response(mp4_path, request, media_type="video/mp4")
 
 
-@router.get("/clips/{clip_id}/thumbnail")
+@router.api_route("/clips/{clip_id}/thumbnail", methods=["GET", "HEAD"])
 def get_clip_thumbnail(clip_id: str) -> FileResponse:
     """Serve or generate a JPEG thumbnail snapshot for an extracted clip."""
     settings = load_settings()

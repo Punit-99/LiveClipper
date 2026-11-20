@@ -32,7 +32,7 @@ from app.clipper.downloader import (
 )
 from app.clipper.extractor import extract_clip
 from app.clipper.models import ImportClip, ImportJob, TranscriptSegment
-from app.clipper.service import ClipperService
+from app.clipper.service import ClipperService, get_clipper_service
 
 
 class TestClipperDownloader(unittest.TestCase):
@@ -263,8 +263,17 @@ class TestClipperAPI(unittest.TestCase):
     """Test FastAPI /api/import/* endpoints."""
 
     def setUp(self):
+        self.tmp_imports = tempfile.TemporaryDirectory()
+        self.patcher = mock.patch("app.api.routes.imports.get_clipper_service")
+        self.mock_get_service = self.patcher.start()
+        self.test_service = ClipperService(imports_dir=Path(self.tmp_imports.name))
+        self.mock_get_service.return_value = self.test_service
         self.app = create_app()
         self.client = TestClient(self.app)
+
+    def tearDown(self):
+        self.patcher.stop()
+        self.tmp_imports.cleanup()
 
     @mock.patch("app.api.routes.imports.fetch_video_info")
     def test_import_info_endpoint(self, mock_fetch):
@@ -334,6 +343,37 @@ class TestClipperAPI(unittest.TestCase):
         self.assertEqual(data["uploads_today"], 0)
         self.assertIn("resets_in_human", data)
         self.assertIn("resets_in_seconds", data)
+
+    def test_import_clip_preview_and_thumbnail_range_streaming(self):
+        """Verify /api/import/clips/{clip_id}/preview returns HTTP 206 and video/mp4 without error."""
+        service = self.test_service
+        test_clip_id = "imp_test_vid_01_10"
+        clip_dir = service.imports_dir / "test_vid" / "clips"
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        mp4_file = clip_dir / f"{test_clip_id}.mp4"
+        thumb_file = clip_dir / f"{test_clip_id}.jpg"
+        mp4_file.write_bytes(b"\x00\x00\x00\x20ftypisom" + b"A" * 1024)
+        thumb_file.write_bytes(b"\xff\xd8\xff\xe0" + b"J" * 256)
+
+        # Test HEAD request on preview
+        head_resp = self.client.head(f"/api/import/clips/{test_clip_id}/preview")
+        self.assertIn(head_resp.status_code, (200, 206))
+        self.assertEqual(head_resp.headers.get("Content-Type"), "video/mp4")
+        self.assertEqual(head_resp.headers.get("Accept-Ranges"), "bytes")
+
+        # Test GET Range request
+        range_resp = self.client.get(
+            f"/api/import/clips/{test_clip_id}/preview",
+            headers={"Range": "bytes=0-500"},
+        )
+        self.assertEqual(range_resp.status_code, 206)
+        self.assertEqual(range_resp.headers.get("Content-Type"), "video/mp4")
+        self.assertIn("bytes 0-500/", range_resp.headers.get("Content-Range", ""))
+
+        # Test HEAD and GET on thumbnail
+        head_thumb = self.client.head(f"/api/import/clips/{test_clip_id}/thumbnail")
+        self.assertEqual(head_thumb.status_code, 200)
+        self.assertEqual(head_thumb.headers.get("Content-Type"), "image/jpeg")
 
 
 if __name__ == "__main__":

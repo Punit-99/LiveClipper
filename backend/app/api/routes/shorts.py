@@ -176,9 +176,10 @@ def list_shorts(
 @router.api_route("/shorts/{clip_id}/preview", methods=["GET", "HEAD"])
 def preview_short(clip_id: str, request: Request) -> Any:
     """Serve the 9:16 vertical Short video file with byte-range streaming support."""
+    clean_id = clip_id.replace(".mp4", "").strip()
     settings = load_settings()
     pipeline = get_shorts_pipeline(settings=settings)
-    record = pipeline.manifest.get(clip_id)
+    record = pipeline.manifest.get(clean_id) or pipeline.manifest.get(clip_id)
 
     short_path = None
     if record and record.get("short_video_path"):
@@ -188,8 +189,8 @@ def preview_short(clip_id: str, request: Request) -> Any:
 
     if not short_path:
         # Search by glob in shorts_dir
-        for p in settings.shorts_output_dir.rglob(f"{clip_id}*_short.mp4"):
-            if p.is_file():
+        for p in settings.shorts_output_dir.rglob(f"*{clean_id}*.mp4"):
+            if p.is_file() and not p.name.endswith("_yt.mp4") and ".tmp" not in p.parts:
                 short_path = p
                 break
 
@@ -202,12 +203,13 @@ def preview_short(clip_id: str, request: Request) -> Any:
     return range_stream_response(short_path, request, media_type="video/mp4")
 
 
-@router.get("/shorts/{clip_id}/thumbnail")
+@router.api_route("/shorts/{clip_id}/thumbnail", methods=["GET", "HEAD"])
 def get_short_thumbnail(clip_id: str) -> FileResponse:
     """Serve or generate a JPEG thumbnail snapshot for a vertical Short."""
+    clean_id = clip_id.replace(".jpg", "").replace(".mp4", "").strip()
     settings = load_settings()
     pipeline = get_shorts_pipeline(settings=settings)
-    record = pipeline.manifest.get(clip_id)
+    record = pipeline.manifest.get(clean_id) or pipeline.manifest.get(clip_id)
 
     short_path = None
     if record and record.get("short_video_path"):
@@ -216,8 +218,10 @@ def get_short_thumbnail(clip_id: str) -> FileResponse:
             short_path = cand
 
     if not short_path:
-        for p in settings.shorts_output_dir.rglob(f"{clip_id}*_short.mp4"):
-            if p.is_file():
+        for p in settings.shorts_output_dir.rglob(f"*{clean_id}*.mp4"):
+            if p.is_file() and not p.name.endswith("_yt.mp4") and ".tmp" not in p.parts:
+                short_path = p
+                break
                 short_path = p
                 break
 

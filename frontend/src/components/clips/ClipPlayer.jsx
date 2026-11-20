@@ -1,4 +1,4 @@
-import React from "react"
+import React, { useState, useEffect } from "react"
 import {
   Dialog,
   DialogContent,
@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dialog"
 import { AspectRatio } from "@/components/ui/aspect-ratio"
 import { Badge } from "@/components/ui/badge"
+import { Film } from "lucide-react"
 
 export function ClipPlayer({ clip, open, onOpenChange }) {
   if (!clip) return null
@@ -18,11 +19,31 @@ export function ClipPlayer({ clip, open, onOpenChange }) {
     ? clip.id
     : ""
   const isImported = Boolean(clip.is_imported || clip.source_type === "imported" || clipId?.startsWith("imp_"))
-  const videoSrc = clipId
+  const initialSrc = clipId
     ? isImported
       ? `/api/import/clips/${clipId}/preview`
       : `/api/clips/${clipId}/preview`
     : null
+
+  const [videoSrc, setVideoSrc] = useState(initialSrc)
+  const [hasError, setHasError] = useState(false)
+
+  useEffect(() => {
+    setVideoSrc(initialSrc)
+    setHasError(false)
+  }, [initialSrc])
+
+  const handleVideoError = () => {
+    if (clipId && videoSrc?.startsWith("/api/import/clips/")) {
+      // Fallback to /api/clips/:id/preview
+      setVideoSrc(`/api/clips/${clipId}/preview`)
+    } else if (clipId && videoSrc?.startsWith("/api/clips/")) {
+      // Fallback to /api/import/clips/:id/preview
+      setVideoSrc(`/api/import/clips/${clipId}/preview`)
+    } else {
+      setHasError(true)
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -42,15 +63,25 @@ export function ClipPlayer({ clip, open, onOpenChange }) {
         </DialogHeader>
 
         {/* 16:9 AspectRatio Video Frame */}
-        <div className="overflow-hidden rounded-lg bg-black border border-[#1f293d]">
-          <AspectRatio ratio={16 / 9}>
-            <video
-              src={videoSrc}
-              controls
-              autoPlay
-              playsInline
-              className="w-full h-full object-contain"
-            />
+        <div className="overflow-hidden rounded-lg bg-black border border-[#1f293d] flex items-center justify-center">
+          <AspectRatio ratio={16 / 9} className="flex items-center justify-center">
+            {videoSrc && !hasError ? (
+              <video
+                key={videoSrc}
+                src={videoSrc}
+                controls
+                autoPlay
+                playsInline
+                preload="auto"
+                onError={handleVideoError}
+                className="w-full h-full object-contain"
+              />
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-2 p-6">
+                <Film className="w-10 h-10 opacity-40 animate-pulse" />
+                <span className="text-xs">Video preview unavailable or still processing</span>
+              </div>
+            )}
           </AspectRatio>
         </div>
 

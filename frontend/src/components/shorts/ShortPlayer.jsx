@@ -26,6 +26,12 @@ export function ShortPlayer({ shortItem, open, onOpenChange }) {
   const videoSrc = clipId ? `/api/shorts/${clipId}/preview` : null
   const duration = Math.round(shortItem.duration || 0)
 
+  const [hasError, setHasError] = useState(false)
+
+  React.useEffect(() => {
+    setHasError(false)
+  }, [videoSrc])
+
   const viralTitles = Array.isArray(shortItem.viral_titles)
     ? shortItem.viral_titles.map((t) => (typeof t === "object" ? t.title : String(t)))
     : []
@@ -67,12 +73,15 @@ export function ShortPlayer({ shortItem, open, onOpenChange }) {
 
         {/* 9:16 Vertical Video Viewport (No horizontal black letterboxing) */}
         <div className="relative mx-auto w-full max-w-[340px] aspect-[9/16] bg-black rounded-xl overflow-hidden border border-slate-800 shadow-2xl flex items-center justify-center">
-          {videoSrc ? (
+          {videoSrc && !hasError ? (
             <video
+              key={videoSrc}
               src={videoSrc}
               controls
               autoPlay
               playsInline
+              preload="auto"
+              onError={() => setHasError(true)}
               className="w-full h-full object-cover rounded-xl"
             />
           ) : (
