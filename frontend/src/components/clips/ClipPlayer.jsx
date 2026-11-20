@@ -11,18 +11,22 @@ import { Badge } from "@/components/ui/badge"
 import { Film } from "lucide-react"
 
 export function ClipPlayer({ clip, open, onOpenChange }) {
-  if (!clip) return null
-
-  const clipId = (clip.clip_id && clip.clip_id !== "undefined")
+  const clipId = (clip?.clip_id && clip.clip_id !== "undefined")
     ? clip.clip_id
-    : (clip.id && clip.id !== "undefined")
+    : (clip?.id && clip.id !== "undefined")
     ? clip.id
     : ""
-  const isImported = Boolean(clip.is_imported || clip.source_type === "imported" || clipId?.startsWith("imp_"))
+  const isImported = Boolean(clip?.is_imported || clip?.source_type === "imported" || clipId?.startsWith("imp_"))
   const initialSrc = clipId
     ? isImported
       ? `/api/import/clips/${clipId}/preview`
       : `/api/clips/${clipId}/preview`
+    : null
+
+  const thumbnailSrc = clipId
+    ? isImported
+      ? `/api/import/clips/${clipId}/thumbnail`
+      : `/api/clips/${clipId}/thumbnail`
     : null
 
   const [videoSrc, setVideoSrc] = useState(initialSrc)
@@ -32,6 +36,8 @@ export function ClipPlayer({ clip, open, onOpenChange }) {
     setVideoSrc(initialSrc)
     setHasError(false)
   }, [initialSrc])
+
+  if (!clip) return null
 
   const handleVideoError = () => {
     if (clipId && videoSrc?.startsWith("/api/import/clips/")) {
@@ -69,6 +75,7 @@ export function ClipPlayer({ clip, open, onOpenChange }) {
               <video
                 key={videoSrc}
                 src={videoSrc}
+                poster={thumbnailSrc || undefined}
                 controls
                 autoPlay
                 playsInline

@@ -410,6 +410,25 @@ def upload_single_short(
 
     queue = get_upload_queue(max_concurrent=settings.max_concurrent_uploads, quota_tracker=tracker)
 
+    # Check if already uploading or in waiting queue
+    busy, current_status, position = queue.is_busy(cid)
+    if busy:
+        if current_status == "uploading":
+            return {
+                "status": "already_uploading",
+                "clip_id": cid,
+                "title": chosen_title,
+                "message": "This Short is already being uploaded.",
+            }
+        else:
+            return {
+                "status": "already_queued",
+                "clip_id": cid,
+                "position": position,
+                "title": chosen_title,
+                "message": f"This Short is already in upload queue (position {position}).",
+            }
+
     def do_upload():
         def on_upload_progress(bytes_sent: int, total_bytes: int) -> None:
             queue.report_progress(cid, bytes_sent, total_bytes)
@@ -500,6 +519,9 @@ def auto_upload_shorts(
     candidates: list[dict[str, Any]] = []
     for r in all_records:
         if r.get("state") == STATE_PROCESSED:
+            cid_chk = r.get("clip_id")
+            if cid_chk and queue.is_busy(cid_chk)[0]:
+                continue
             sc = r.get("highlight_score", 0)
             if sc >= min_score:
                 if not payload.channel or r.get("channel") == payload.channel:

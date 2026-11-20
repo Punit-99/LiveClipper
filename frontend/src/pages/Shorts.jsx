@@ -34,6 +34,7 @@ export default function ShortsPage({
   onDeleteShort,
   onDeleteAllShorts,
   uploadTasks = {},
+  uploadQueue = {},
 }) {
   const [viewMode, setViewMode] = useState("grid") // "grid" | "table"
   const [searchQuery, setSearchQuery] = useState("")
@@ -132,9 +133,18 @@ export default function ShortsPage({
 
   // Single Upload handler
   const handleUploadSingle = async (uploadId) => {
+    const isAct = (uploadQueue?.active || []).some((it) => it.clip_id === uploadId)
+    const isWait = (uploadQueue?.waiting || []).some((it) => it.clip_id === uploadId)
+    if (isAct || uploadTasks[uploadId]?.status === "uploading") {
+      toast.info("This Short is already being uploaded.")
+      return
+    }
+    if (isWait || uploadTasks[uploadId]?.status === "queued") {
+      toast.info("This Short is already queued for upload.")
+      return
+    }
     try {
       await onUploadSingle(uploadId)
-      toast.success("Short queued for YouTube upload!")
     } catch (err) {
       console.error("Failed to upload short:", err)
       toast.error(`Failed to upload short: ${err.message || "Unknown error"}`)
@@ -333,6 +343,7 @@ export default function ShortsPage({
                 onReupload={handleReupload}
                 onDelete={() => setShortToDelete(short)}
                 uploadState={uploadTasks[cid]}
+                uploadQueue={uploadQueue}
                 verifyState={verifyMap[cid]}
               />
             )
@@ -348,6 +359,8 @@ export default function ShortsPage({
           onUpload={handleUploadSingle}
           onVerify={handleVerify}
           onReupload={handleReupload}
+          uploadTasks={uploadTasks}
+          uploadQueue={uploadQueue}
           onDelete={(deleteId) => {
             const target = shorts.find((s) => (s.clip_id || s.id) === deleteId)
             if (target) setShortToDelete(target)

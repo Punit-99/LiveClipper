@@ -393,6 +393,21 @@ def process_imported_clip(clip_id: str) -> dict[str, Any]:
     pipeline.scan_clips()
 
     queue = get_processing_queue(settings.max_concurrent_processing)
+    is_busy, busy_status, busy_pos = queue.is_busy(clip_id)
+    if is_busy:
+        if busy_status == "active":
+            return {
+                "status": "already_processing",
+                "clip_id": clip_id,
+                "message": "This clip is already being processed.",
+            }
+        else:
+            return {
+                "status": "already_queued",
+                "clip_id": clip_id,
+                "position": busy_pos,
+                "message": f"This clip is already in queue (position {busy_pos}).",
+            }
 
     def _worker():
         pipeline.process_pending_shorts(

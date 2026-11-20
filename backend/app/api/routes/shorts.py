@@ -47,6 +47,8 @@ def list_shorts(
     output: list[dict[str, Any]] = []
     for rec in records:
         cid = rec.get("clip_id")
+        if not cid or cid.startswith("source"):
+            continue
         raw_ch = rec.get("channel", "streamer")
         ch = resolve_channel_name(raw_ch)
         st = rec.get("state", "PROCESSED")
@@ -64,7 +66,12 @@ def list_shorts(
                 if cand2.is_file():
                     short_video_path = cand2
                 else:
-                    continue
+                    for p in settings.shorts_output_dir.rglob(f"*{cid}*.mp4"):
+                        if p.is_file() and not p.name.endswith("_yt.mp4") and ".tmp" not in p.parts:
+                            short_video_path = p
+                            break
+                    else:
+                        continue
 
         if channel and ch.lower() != channel.lower() and raw_ch.lower() != channel.lower():
             continue
@@ -222,8 +229,6 @@ def get_short_thumbnail(clip_id: str) -> FileResponse:
             if p.is_file() and not p.name.endswith("_yt.mp4") and ".tmp" not in p.parts:
                 short_path = p
                 break
-                short_path = p
-                break
 
     if not short_path or not short_path.is_file():
         raise HTTPException(
@@ -231,7 +236,9 @@ def get_short_thumbnail(clip_id: str) -> FileResponse:
             detail=f"Vertical short with ID '{clip_id}' was not found.",
         )
 
-    thumb_path = short_path.parent / f"{short_path.stem}_thumb.jpg"
+    thumb_path = short_path.with_suffix(".jpg")
+    if not thumb_path.is_file():
+        thumb_path = short_path.parent / f"{short_path.stem}_thumb.jpg"
     if not thumb_path.is_file():
         thumb_path = short_path.parent / f"{clip_id}_thumb.jpg"
 
@@ -307,6 +314,9 @@ def process_pending_shorts(
     for c in all_clips:
         cid = c["clip_id"]
         st = c.get("state")
+        busy, _, _ = queue.is_busy(cid)
+        if busy:
+            continue
         if payload.force or st in (STATE_DISCOVERED, STATE_FAILED):
             candidates.append(c)
 
@@ -401,6 +411,25 @@ def process_single_short(
 
     queue = get_processing_queue(settings.max_concurrent_processing)
 
+    # Check if already processing or in waiting queue
+    busy, current_status, position = queue.is_busy(clip_id)
+    if busy:
+        if current_status == "processing":
+            return {
+                "status": "already_processing",
+                "clip_id": clip_id,
+                "title": clip_title,
+                "message": "This clip is already being processed.",
+            }
+        else:
+            return {
+                "status": "already_queued",
+                "clip_id": clip_id,
+                "position": position,
+                "title": clip_title,
+                "message": f"This clip is already in queue (position {position}).",
+            }
+
     def do_work():
         def on_single_progress(cid: str, stage: str, pct: int) -> None:
             queue.report_progress(cid, stage, pct)
@@ -433,6 +462,41 @@ def process_single_short(
             "position": item.position,
             "title": clip_title,
         }
+
+
+@router.post("/shorts/{clip_id}/reconvert")
+def reconvert_short(
+    clip_id: str,
+    background_tasks: BackgroundTasks,
+    req: ProcessShortsRequest | None = None,
+) -> dict[str, Any]:
+    """Re-process an already processed clip to replace the existing Short."""
+    payload = req or ProcessShortsRequest()
+    payload.force = True
+    settings = load_settings()
+    pipeline = get_shorts_pipeline(settings=settings)
+
+    queue = get_processing_queue(settings.max_concurrent_processing)
+    busy, current_status, position = queue.is_busy(clip_id)
+    if busy:
+        if current_status == "processing":
+            return {
+                "status": "already_processing",
+                "clip_id": clip_id,
+                "message": "This clip is already being processed.",
+            }
+        else:
+            return {
+                "status": "already_queued",
+                "clip_id": clip_id,
+                "position": position,
+                "message": f"This clip is already in queue (position {position}).",
+            }
+
+    # Reset manifest state to DISCOVERED so pipeline re-renders
+    pipeline.manifest.update_record(clip_id, state=STATE_DISCOVERED)
+
+    return process_single_short(clip_id=clip_id, background_tasks=background_tasks, req=payload)
 
 
 def _find_short_files_by_id(shorts_dir: Path, clip_id: str, record: dict[str, Any] | None) -> list[Path]:

@@ -196,8 +196,14 @@ export default function ImportPage({ onNavigate }) {
   // Process clip to short
   const handleProcessClip = async (clipId) => {
     try {
-      await processImportedClip(clipId)
-      toast.success("Clip queued for Shorts processing!")
+      const res = await processImportedClip(clipId)
+      if (res?.status === "already_processing") {
+        toast.info("This clip is already being processed.")
+      } else if (res?.status === "already_queued") {
+        toast.info(`This clip is already in queue (position ${res.position || 1}).`)
+      } else {
+        toast.success("Clip queued for Shorts processing!")
+      }
     } catch (err) {
       toast.error(err.message || "Failed to queue clip.")
     }

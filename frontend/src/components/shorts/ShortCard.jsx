@@ -35,22 +35,27 @@ export function ShortCard({
   onReupload,
   onDelete,
   uploadState,
+  uploadQueue,
   verifyState,
 }) {
-  const clipId = (shortItem.clip_id && shortItem.clip_id !== "undefined")
+  const clipId = (shortItem?.clip_id && shortItem.clip_id !== "undefined")
     ? shortItem.clip_id
-    : (shortItem.id && shortItem.id !== "undefined")
+    : (shortItem?.id && shortItem.id !== "undefined")
     ? shortItem.id
     : ""
-  const score = Number(shortItem.score ?? shortItem.highlight_score ?? 0)
+  const score = Number(shortItem?.score ?? shortItem?.highlight_score ?? 0)
 
-  const isUploaded = shortItem.state === "UPLOADED" || shortItem.youtube_url
-  const isFailed = shortItem.state === "FAILED"
-  const isProcessing = shortItem.state === "PROCESSING" || shortItem.state === "DISCOVERED"
+  const isUploaded = shortItem?.state === "UPLOADED" || shortItem?.youtube_url
+  const isFailed = shortItem?.state === "FAILED"
+  const isProcessing = shortItem?.state === "PROCESSING" || shortItem?.state === "DISCOVERED"
 
-  const isUploadingActive = uploadState?.status === "uploading"
-  const isUploadQueued = uploadState?.status === "queued"
-  const uploadPct = uploadState?.percentage || 0
+  const activeUpload = (uploadQueue?.active || []).find((it) => it.clip_id === clipId)
+  const waitingUpload = (uploadQueue?.waiting || []).find((it) => it.clip_id === clipId)
+
+  const isUploadingActive = uploadState?.status === "uploading" || Boolean(activeUpload)
+  const isUploadQueued = uploadState?.status === "queued" || Boolean(waitingUpload)
+  const uploadPct = uploadState?.percentage || activeUpload?.percentage || 0
+  const queuePos = waitingUpload?.position
 
   const isVerifying = verifyState?.loading
   const verificationResult = verifyState?.result

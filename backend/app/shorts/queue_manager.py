@@ -88,6 +88,20 @@ class ProcessingQueueManager:
                     return it
             return self._history.get(clip_id)
 
+    def is_busy(self, clip_id: str) -> tuple[bool, str, int | None]:
+        """Check if a clip is currently processing or queued.
+
+        Returns:
+            (is_busy, status, position)
+        """
+        with self._lock:
+            if clip_id in self._active:
+                return True, "processing", None
+            for it in self._waiting:
+                if it.clip_id == clip_id:
+                    return True, "queued", it.position
+            return False, "", None
+
     def enqueue(
         self,
         clip_id: str,
@@ -302,6 +316,20 @@ class UploadQueueManager:
                 if it.clip_id == clip_id:
                     return it
             return self._history.get(clip_id)
+
+    def is_busy(self, clip_id: str) -> tuple[bool, str, int | None]:
+        """Check if a short is currently uploading or queued for upload.
+
+        Returns:
+            (is_busy, status, position)
+        """
+        with self._lock:
+            if clip_id in self._active:
+                return True, "uploading", None
+            for it in self._waiting:
+                if it.clip_id == clip_id:
+                    return True, "queued", it.position
+            return False, "", None
 
     def enqueue(
         self,

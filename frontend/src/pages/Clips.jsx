@@ -24,10 +24,12 @@ import { toast } from "sonner"
 export default function ClipsPage({
   clips = [],
   onProcessSingle,
+  onReconvertShort,
   onProcessAll,
   onRefresh,
   onDeleteClip,
   onDeleteAllClips,
+  processingQueue,
 }) {
   const [viewMode, setViewMode] = useState("grid") // "grid" | "table"
   const [searchQuery, setSearchQuery] = useState("")
@@ -115,6 +117,21 @@ export default function ClipsPage({
     setSelectedIds([])
   }
 
+  const handleProcessAllNew = () => {
+    const pending = (clips || []).filter((c) => {
+      const cid = c.clip_id || c.id
+      if (c.has_short || c.short_state === "PROCESSED") return false
+      const active = (processingQueue?.active || []).some((it) => it.clip_id === cid)
+      const queued = (processingQueue?.waiting || []).some((it) => it.clip_id === cid)
+      return !active && !queued
+    })
+    if (pending.length === 0) {
+      toast.info("All clips have already been processed into Shorts.")
+      return
+    }
+    if (onProcessAll) onProcessAll()
+  }
+
   // Batch delete
   const handleBatchDelete = async () => {
     if (selectedIds.length === 0) return
@@ -193,6 +210,15 @@ export default function ClipsPage({
               <TableIcon className="w-3.5 h-3.5" />
             </Button>
           </div>
+
+          <Button
+            size="sm"
+            onClick={handleProcessAllNew}
+            className="h-8 text-xs bg-blue-600 hover:bg-blue-500 text-white font-medium flex items-center space-x-1.5"
+          >
+            <Film className="w-3.5 h-3.5" />
+            <span>Process All</span>
+          </Button>
 
           <Button
             variant="outline"
@@ -316,7 +342,9 @@ export default function ClipsPage({
                 onToggleSelect={handleToggleSelect}
                 onPreview={(c) => setPreviewClip(c)}
                 onProcess={handleProcessSingle}
+                onReconvert={onReconvertShort}
                 onDelete={() => setClipToDelete(clip)}
+                processingQueue={processingQueue}
               />
             )
           })}
@@ -329,10 +357,12 @@ export default function ClipsPage({
           onToggleSelectAll={handleToggleSelectAll}
           onPreview={(c) => setPreviewClip(c)}
           onProcess={handleProcessSingle}
+          onReconvert={onReconvertShort}
           onDelete={(deleteId) => {
             const target = clips.find((c) => (c.clip_id || c.id) === deleteId)
             if (target) setClipToDelete(target)
           }}
+          processingQueue={processingQueue}
         />
       )}
 

@@ -22,6 +22,7 @@ import {
   stopMonitoring,
   processSingleShort,
   processPendingShorts,
+  reconvertShort,
   uploadSingleShort,
   updateSettings,
   deleteSingleClip,
@@ -300,6 +301,19 @@ export default function App() {
     }
   }
 
+  const handleReconvertSingle = async (clipId) => {
+    try {
+      const res = await reconvertShort(clipId)
+      toast.success("Short queued for re-processing!")
+      await loadAllData()
+      return res
+    } catch (err) {
+      console.error("Failed to reconvert short:", err)
+      toast.error(err.message || "Failed to reconvert short.")
+      throw err
+    }
+  }
+
   const handleUploadSingle = async (clipId) => {
     try {
       await uploadSingleShort(clipId)
@@ -423,10 +437,12 @@ export default function App() {
             <Clips
               clips={clips}
               onProcessSingle={handleProcessSingle}
+              onReconvertShort={handleReconvertSingle}
               onProcessAll={() => processPendingShorts()}
               onRefresh={loadAllData}
               onDeleteClip={handleDeleteClip}
               onDeleteAllClips={handleDeleteAllClips}
+              processingQueue={processingQueue}
             />
           )}
 
@@ -440,6 +456,7 @@ export default function App() {
               onDeleteShort={handleDeleteShort}
               onDeleteAllShorts={handleDeleteAllShorts}
               uploadTasks={uploadTasks}
+              uploadQueue={uploadQueue}
             />
           )}
 

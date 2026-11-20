@@ -13,24 +13,25 @@ import { toast } from "sonner"
 
 export function ShortPlayer({ shortItem, open, onOpenChange }) {
   const [copiedTitle, setCopiedTitle] = useState("")
+  const [hasError, setHasError] = useState(false)
 
-  if (!shortItem) return null
-
-  const clipId = (shortItem.clip_id && shortItem.clip_id !== "undefined")
+  const clipId = (shortItem?.clip_id && shortItem.clip_id !== "undefined")
     ? shortItem.clip_id
-    : (shortItem.id && shortItem.id !== "undefined")
+    : (shortItem?.id && shortItem.id !== "undefined")
     ? shortItem.id
     : ""
 
-  const score = Number(shortItem.score ?? shortItem.highlight_score ?? 0)
   const videoSrc = clipId ? `/api/shorts/${clipId}/preview` : null
-  const duration = Math.round(shortItem.duration || 0)
-
-  const [hasError, setHasError] = useState(false)
+  const thumbnailSrc = clipId ? `/api/shorts/${clipId}/thumbnail` : null
 
   React.useEffect(() => {
     setHasError(false)
   }, [videoSrc])
+
+  if (!shortItem) return null
+
+  const score = Number(shortItem.score ?? shortItem.highlight_score ?? 0)
+  const duration = Math.round(shortItem.duration || 0)
 
   const viralTitles = Array.isArray(shortItem.viral_titles)
     ? shortItem.viral_titles.map((t) => (typeof t === "object" ? t.title : String(t)))
@@ -77,6 +78,7 @@ export function ShortPlayer({ shortItem, open, onOpenChange }) {
             <video
               key={videoSrc}
               src={videoSrc}
+              poster={thumbnailSrc || undefined}
               controls
               autoPlay
               playsInline

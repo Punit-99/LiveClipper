@@ -126,6 +126,19 @@ export async function processSingleShort(clipId, payload = {}) {
   return res.json();
 }
 
+export async function reconvertShort(clipId, payload = {}) {
+  const res = await fetch(`${API_BASE}/shorts/${clipId}/reconvert`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Re-convert short failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function uploadSingleShort(clipId, payload = {}) {
   const res = await fetch(`${API_BASE}/upload/${clipId}`, {
     method: 'POST',

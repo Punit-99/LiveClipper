@@ -14,6 +14,26 @@ from app.clipper.models import ImportClip, MomentCandidate, VideoMetadata
 log = logging.getLogger(__name__)
 
 
+def probe_video_duration(video_path: Path) -> float:
+    """Accurately probe actual media duration using ffprobe."""
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(video_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        val = float(proc.stdout.strip())
+        return val if val > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
 def extract_clip(
     source_video_path: Path,
     moment: MomentCandidate,
@@ -51,8 +71,11 @@ def extract_clip(
         log.error("FFmpeg clip extraction failed for %s: %s", clip_id, err.stderr.decode("utf-8", "ignore"))
         raise RuntimeError(f"FFmpeg extraction failed: {err}") from err
 
+    # Probe actual duration
+    actual_duration = probe_video_duration(clip_path) or moment.duration
+
     # Thumbnail snapshot at 20% into the clip
-    thumb_sec = min(max(1.0, moment.duration * 0.20), moment.duration - 0.5)
+    thumb_sec = min(max(1.0, actual_duration * 0.20), actual_duration - 0.5)
     thumb_cmd = [
         "ffmpeg", "-y",
         "-ss", f"{thumb_sec:.2f}",
@@ -76,7 +99,7 @@ def extract_clip(
         channel=metadata.channel,
         start_time=moment.start_time,
         end_time=moment.end_time,
-        duration=moment.duration,
+        duration=actual_duration,
         score=moment.score,
         reason=moment.reason,
         suggested_title=moment.suggested_title,
@@ -89,7 +112,7 @@ def extract_clip(
         source_url=metadata.url,
     )
 
-    # Save JSON sidecar for Shorts pipeline compatibility
+    # Save JSON sidecar with both top-level and nested structures for full pipeline compatibility
     sidecar_data = {
         "clip_id": clip_id,
         "streamer_name": metadata.channel,
@@ -98,8 +121,10 @@ def extract_clip(
         "source_video_id": metadata.video_id,
         "start_timestamp": moment.start_time,
         "end_timestamp": moment.end_time,
-        "duration": moment.duration,
+        "duration": actual_duration,
         "score": moment.score,
+        "highlight_score": int(moment.score),
+        "title": moment.suggested_title,
         "analysis_reason": moment.reason,
         "suggested_title": moment.suggested_title,
         "transcript": moment.transcript_excerpt,
@@ -111,6 +136,15 @@ def extract_clip(
         "thumbnail_path": str(thumb_path) if thumb_path.is_file() else "",
         "created_at": created_iso,
         "signal_scores": moment.signal_scores,
+        "analysis": {
+            "title": moment.suggested_title,
+            "highlight_score": int(moment.score),
+            "category": "highlight",
+            "reasoning": moment.reason,
+        },
+        "selection": {
+            "target_duration_seconds": actual_duration,
+        },
     }
     sidecar_path.write_text(json.dumps(sidecar_data, indent=2), encoding="utf-8")
 

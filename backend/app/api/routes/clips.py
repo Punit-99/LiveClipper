@@ -75,6 +75,10 @@ def list_clips(
         src_path = Path(rec.get("source_clip_path", ""))
         sidecar_path = rec.get("source_sidecar_path")
 
+        # Exclude raw downloaded source files
+        if not cid or cid.startswith("source") or src_path.name.startswith("source"):
+            continue
+
         # Read sidecar for extra details (duration, timestamps, quotes)
         sidecar_data: dict[str, Any] = {}
         if sidecar_path and Path(sidecar_path).is_file():
@@ -85,7 +89,17 @@ def list_clips(
                 pass
 
         analysis = sidecar_data.get("analysis") or {}
-        score = int(rec.get("highlight_score") or analysis.get("highlight_score") or 0)
+
+        # Score calculation (top-level score takes precedence for imported clips)
+        score = 0
+        if "score" in sidecar_data:
+            score = int(float(sidecar_data["score"]))
+        elif "highlight_score" in sidecar_data:
+            score = int(float(sidecar_data["highlight_score"]))
+        elif rec.get("highlight_score"):
+            score = int(rec["highlight_score"])
+        elif analysis.get("highlight_score"):
+            score = int(analysis["highlight_score"])
 
         # Filters
         if min_score is not None and score < min_score:
@@ -95,17 +109,44 @@ def list_clips(
         if platform and c_platform.lower() != platform.lower():
             continue
 
-        c_channel = resolve_channel_name(rec.get("channel") or sidecar_data.get("streamer_name") or "unknown")
+        c_channel = resolve_channel_name(
+            rec.get("channel")
+            or sidecar_data.get("channel")
+            or sidecar_data.get("streamer_name")
+            or "unknown"
+        )
         if channel and c_channel.lower() != channel.lower() and str(rec.get("channel", "")).lower() != channel.lower():
             continue
 
-        # Duration
-        selection = sidecar_data.get("selection") or {}
-        duration = float(
-            selection.get("target_duration_seconds")
-            or selection.get("coverage", {}).get("total_media_duration")
-            or 0.0
+        # Duration (top-level duration takes precedence for imported clips)
+        duration = 0.0
+        if "duration" in sidecar_data:
+            duration = float(sidecar_data["duration"])
+        elif "selection" in sidecar_data:
+            selection = sidecar_data.get("selection") or {}
+            duration = float(
+                selection.get("target_duration_seconds")
+                or selection.get("coverage", {}).get("total_media_duration")
+                or 0.0
+            )
+        elif "end_timestamp" in sidecar_data and "start_timestamp" in sidecar_data:
+            duration = float(sidecar_data["end_timestamp"]) - float(sidecar_data["start_timestamp"])
+
+        title = (
+            sidecar_data.get("suggested_title")
+            or sidecar_data.get("title")
+            or rec.get("title")
+            or analysis.get("title")
+            or "Stream Highlight"
         )
+
+        is_imported = bool(
+            sidecar_data.get("is_imported")
+            or rec.get("is_imported")
+            or cid.startswith("imp_")
+            or sidecar_data.get("source_type") == "imported"
+        )
+        source_type = "imported" if is_imported else "live"
 
         manifest_entry = manifest_by_id.get(cid)
         has_short = bool(
@@ -114,7 +155,7 @@ def list_clips(
             and Path(manifest_entry["short_video_path"]).is_file()
         )
 
-        rec_time_iso = sidecar_data.get("recorded_at_iso") or sidecar_data.get("extracted_at_iso")
+        rec_time_iso = sidecar_data.get("recorded_at_iso") or sidecar_data.get("extracted_at_iso") or sidecar_data.get("created_at")
         if not rec_time_iso and src_path.is_file():
             try:
                 rec_time_iso = datetime.fromtimestamp(src_path.stat().st_mtime, tz=timezone.utc).isoformat()
@@ -130,16 +171,18 @@ def list_clips(
             "platform": c_platform,
             "score": score,
             "highlight_score": score,
-            "title": rec.get("title") or analysis.get("title") or "Stream Highlight",
+            "title": title,
             "category": rec.get("category") or analysis.get("category") or "highlight",
             "duration": round(duration, 1),
-            "reasoning": analysis.get("reasoning") or "",
+            "reasoning": analysis.get("reasoning") or sidecar_data.get("analysis_reason") or "",
             "quotes": analysis.get("key_quotes") or [],
             "extracted_at": sidecar_data.get("extracted_at_iso") or rec_time_iso or "",
             "recorded_at_iso": rec_time_iso or sidecar_data.get("extracted_at_iso") or "",
             "has_short": has_short,
             "short_state": manifest_entry.get("state") if manifest_entry else "DISCOVERED",
             "short_path": manifest_entry.get("short_video_path") if manifest_entry else None,
+            "is_imported": is_imported,
+            "source_type": source_type,
         })
 
     # Sort newest recorded first
@@ -177,7 +220,9 @@ def get_clip_thumbnail(clip_id: str) -> FileResponse:
         )
 
     # Check for existing thumbnail
-    thumb_path = mp4_path.parent / f"{mp4_path.stem}_thumb.jpg"
+    thumb_path = mp4_path.with_suffix(".jpg")
+    if not thumb_path.is_file():
+        thumb_path = mp4_path.parent / f"{mp4_path.stem}_thumb.jpg"
     if not thumb_path.is_file():
         thumb_path = mp4_path.parent / f"{clip_id}_thumb.jpg"
 

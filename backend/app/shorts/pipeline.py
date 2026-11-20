@@ -178,12 +178,18 @@ class ShortsPipeline:
         manifest: ShortsManifest | None = None,
         clips_dir: Path | str | None = None,
         shorts_dir: Path | str | None = None,
+        imports_dir: Path | str | None = None,
         viral_generator: ViralMetadataGenerator | None = None,
     ) -> None:
         self.settings = settings or load_settings()
         self.clips_dir = Path(clips_dir) if clips_dir else self.settings.clips_output_dir
         self.shorts_dir = Path(shorts_dir) if shorts_dir else self.settings.shorts_output_dir
-        self.imports_dir = Path(getattr(self.settings, "imports_dir", self.clips_dir.parent / "imports"))
+        if imports_dir:
+            self.imports_dir = Path(imports_dir)
+        elif clips_dir:
+            self.imports_dir = self.clips_dir.parent / "imports"
+        else:
+            self.imports_dir = Path(getattr(self.settings, "imports_dir", self.clips_dir.parent / "imports"))
 
         self.manifest = manifest or ShortsManifest(self.shorts_dir / "manifest.jsonl")
 
@@ -234,6 +240,12 @@ class ShortsPipeline:
         clean_channel = channel.lstrip("#").strip().lower() if channel else None
         discovered: list[dict[str, Any]] = []
 
+        # Clean up any legacy bogus source records from manifest
+        for m_rec in self.manifest.all_records():
+            cid_str = str(m_rec.get("clip_id", ""))
+            if cid_str.startswith("source") or cid_str == "source.mp4":
+                self.manifest.remove_record(cid_str)
+
         # Scan clips/<channel>/*.mp4, clips/<platform>/<channel>/*.mp4, and clips/*.mp4
         clip_files: list[Path] = []
         if clean_channel:
@@ -244,10 +256,9 @@ class ShortsPipeline:
             clip_files.extend(self.clips_dir.glob("*/*.mp4"))
             clip_files.extend(self.clips_dir.glob("*.mp4"))
 
-        # Also scan imported clips directory (e.g. imports/<video_id>/clips/*.mp4)
+        # Also scan imported clips directory (only imports/<video_id>/clips/*.mp4)
         if self.imports_dir.is_dir():
-            clip_files.extend(self.imports_dir.glob("*/*/*.mp4"))
-            clip_files.extend(self.imports_dir.glob("*/*.mp4"))
+            clip_files.extend(self.imports_dir.glob("*/clips/*.mp4"))
 
         seen_paths: set[Path] = set()
         deduped_files: list[Path] = []
@@ -259,7 +270,7 @@ class ShortsPipeline:
         clip_files = deduped_files
 
         for clip_file in clip_files:
-            if clip_file.name.startswith((".", "_")):
+            if clip_file.name.startswith((".", "_")) or clip_file.name.startswith("source"):
                 continue
 
             # Load sidecar if present
@@ -273,8 +284,8 @@ class ShortsPipeline:
                     pass
 
             clip_id = sidecar_data.get("clip_id") or self._extract_clip_id(clip_file.stem)
-            ch = sidecar_data.get("streamer_name") or clip_file.parent.name
-            if ch == self.clips_dir.name:
+            ch = sidecar_data.get("streamer_name") or sidecar_data.get("channel") or clip_file.parent.name
+            if ch == self.clips_dir.name or ch == "clips":
                 ch = "streamer"
             ch = ch.lstrip("#").strip().lower()
 
@@ -314,16 +325,23 @@ class ShortsPipeline:
                 )
             else:
                 record = existing
-                # If file paths changed, update them
-                if record.get("source_clip_path") != str(clip_file.resolve()) or not record.get("platform") or record.get("is_imported") != is_imported:
-                    record = self.manifest.update_record(
-                        clip_id=clip_id,
-                        platform=platform,
-                        source_clip_path=str(clip_file.resolve()),
-                        source_sidecar_path=str(sidecar_path.resolve()) if sidecar_path.is_file() else None,
-                        is_imported=is_imported,
-                        source_type=source_type,
-                    )
+                updates: dict[str, Any] = {}
+                if record.get("source_clip_path") != str(clip_file.resolve()):
+                    updates["source_clip_path"] = str(clip_file.resolve())
+                if not record.get("platform"):
+                    updates["platform"] = platform
+                if record.get("is_imported") != is_imported:
+                    updates["is_imported"] = is_imported
+                    updates["source_type"] = source_type
+                if is_imported:
+                    if (record.get("highlight_score", 0) == 0 or record.get("highlight_score") is None) and score > 0:
+                        updates["highlight_score"] = score
+                    if record.get("title") in ("Imported Highlight", "Stream Highlight", None, "") and title:
+                        updates["title"] = title
+                    if record.get("channel") in ("streamer", "unknown", None, "") and ch:
+                        updates["channel"] = ch
+                if updates:
+                    record = self.manifest.update_record(clip_id=clip_id, **updates)
 
             discovered.append(record)
 

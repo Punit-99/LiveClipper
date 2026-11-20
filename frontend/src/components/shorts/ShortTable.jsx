@@ -1,5 +1,5 @@
 import React from "react"
-import { Play, Upload, ExternalLink, ShieldCheck, RotateCw, Trash2, CheckCircle2 } from "lucide-react"
+import { Play, Upload, ExternalLink, ShieldCheck, RotateCw, Trash2, CheckCircle2, Loader2, Clock } from "lucide-react"
 import {
   Table,
   TableBody,
@@ -23,6 +23,8 @@ export function ShortTable({
   onVerify,
   onReupload,
   onDelete,
+  uploadTasks = {},
+  uploadQueue = {},
 }) {
   const isAllSelected = shorts.length > 0 && selectedIds.length === shorts.length
 
@@ -55,6 +57,14 @@ export function ShortTable({
             const isFailed = short.state === "FAILED"
             const isSelected = selectedIds.includes(clipId)
 
+            const activeUpload = (uploadQueue?.active || []).find((it) => it.clip_id === clipId)
+            const waitingUpload = (uploadQueue?.waiting || []).find((it) => it.clip_id === clipId)
+            const task = uploadTasks[clipId]
+            const isUploading = task?.status === "uploading" || Boolean(activeUpload)
+            const isQueued = task?.status === "queued" || Boolean(waitingUpload)
+            const uploadPct = task?.percentage || activeUpload?.percentage || 0
+            const queuePos = waitingUpload?.position
+
             return (
               <TableRow
                 key={clipId}
@@ -68,7 +78,17 @@ export function ShortTable({
                   />
                 </TableCell>
                 <TableCell>
-                  {isUploaded ? (
+                  {isUploading ? (
+                    <Badge variant="outline" className="border-blue-500/30 text-blue-400 text-[10px] space-x-1">
+                      <Loader2 className="w-2.5 h-2.5 animate-spin mr-1" />
+                      <span>{uploadPct}%</span>
+                    </Badge>
+                  ) : isQueued ? (
+                    <Badge variant="outline" className="border-amber-500/30 text-amber-400 text-[10px] space-x-1">
+                      <Clock className="w-2.5 h-2.5 mr-1" />
+                      <span>Queued {queuePos ? `#${queuePos}` : ''}</span>
+                    </Badge>
+                  ) : isUploaded ? (
                     <Badge variant="success" className="text-[10px]">
                       Uploaded ✓
                     </Badge>
@@ -112,7 +132,27 @@ export function ShortTable({
                       <Play className="w-3.5 h-3.5" />
                     </Button>
 
-                    {isUploaded ? (
+                    {isUploading ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled
+                        className="h-7 px-2 text-xs text-blue-400 cursor-not-allowed"
+                      >
+                        <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+                        <span>{uploadPct}%</span>
+                      </Button>
+                    ) : isQueued ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled
+                        className="h-7 px-2 text-xs text-amber-400 cursor-not-allowed"
+                      >
+                        <Clock className="w-3.5 h-3.5 mr-1" />
+                        <span>Queued {queuePos ? `#${queuePos}` : ''}</span>
+                      </Button>
+                    ) : isUploaded ? (
                       <>
                         <Button
                           variant="ghost"
