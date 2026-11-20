@@ -429,9 +429,13 @@ export default function Clips({
                   {/* Recorded date & time */}
                   <div className="flex items-center space-x-1.5 text-[11px] text-slate-400 pt-1">
                     <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                    <span>{formatDateTime(clip.recorded_at_iso || clip.extracted_at)}</span>
-                    <span className="text-slate-600">•</span>
-                    <span className="text-slate-500">{formatRelativeTime(clip.recorded_at_iso || clip.extracted_at)}</span>
+                    <span>{formatDateTime(clip.recorded_at_iso || clip.extracted_at) || 'Recently recorded'}</span>
+                    {(clip.recorded_at_iso || clip.extracted_at) && (
+                      <>
+                        <span className="text-slate-600">•</span>
+                        <span className="text-slate-500">{formatRelativeTime(clip.recorded_at_iso || clip.extracted_at)}</span>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -482,15 +486,31 @@ export default function Clips({
           <div className="bg-[#121722] border border-[#1f293d] rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
             {/* Modal Header */}
             <div className="px-6 py-4 border-b border-[#1f293d] flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-blue-500/10 text-blue-400">
-                  {formatChannelName(selectedClip.channel)}
-                </span>
-                <span className="text-sm font-bold text-white line-clamp-1">{selectedClip.title}</span>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-blue-500/10 text-blue-400">
+                    {formatChannelName(selectedClip.channel)}
+                  </span>
+                  <span className="text-sm font-bold text-white line-clamp-1">{selectedClip.title}</span>
+                </div>
+                <div className="flex items-center space-x-2 text-xs text-slate-400 mt-1">
+                  <span>Score: {selectedClip.score}/100</span>
+                  <span>•</span>
+                  <span>{formatDuration(selectedClip.duration)}</span>
+                  {(selectedClip.recorded_at_iso || selectedClip.extracted_at) && (
+                    <>
+                      <span>•</span>
+                      <span className="flex items-center space-x-1">
+                        <Clock className="w-3 h-3 text-slate-500" />
+                        <span>Recorded: {formatDateTime(selectedClip.recorded_at_iso || selectedClip.extracted_at)}</span>
+                      </span>
+                    </>
+                  )}
+                </div>
               </div>
               <button
                 onClick={() => setSelectedClip(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors ml-3"
               >
                 <X className="w-5 h-5" />
               </button>

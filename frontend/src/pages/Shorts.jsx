@@ -318,6 +318,12 @@ export default function Shorts({
                   <span>Score: {selectedShort.score}/100</span>
                   <span>•</span>
                   <span>{formatDuration(selectedShort.duration)}</span>
+                  {selectedShort.recorded_at_iso && (
+                    <>
+                      <span>•</span>
+                      <span>Recorded: {formatDateTime(selectedShort.recorded_at_iso)}</span>
+                    </>
+                  )}
                 </div>
               </div>
               <button
