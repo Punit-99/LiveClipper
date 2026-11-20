@@ -126,6 +126,7 @@ class MultiStreamManager:
         extractor_process_factory: ExtractorProcessFactory | None = None,
         on_extracted: Callable[[ClipExtractionResult], None] | None = None,
         on_state_change: StateChangeCallback | None = None,
+        on_verdict: Callable[[AnalyzedHighlight], None] | None = None,
         custom_sessions: list[StreamSession] | None = None,
     ) -> None:
         max_streams = (
@@ -178,6 +179,7 @@ class MultiStreamManager:
         self._extractor_process_factory = extractor_process_factory
         self._on_extracted = on_extracted
         self._on_state_change = on_state_change
+        self._on_verdict = on_verdict
 
         # Normalized deduplicated target channels preserving order.
         self._target_channels: list[str] = []
@@ -605,6 +607,8 @@ class MultiStreamManager:
             JsonlAnalysisSink(self._settings.highlights_output_path),
             self._router,
         ]
+        if self._on_verdict is not None:
+            sinks.append(self._on_verdict)
         composite_sink = CompositeAnalysisSink(*sinks)
 
         log.info(

@@ -14,7 +14,7 @@ import {
   Trash2,
   AlertTriangle
 } from 'lucide-react';
-import { formatDuration, deleteSingleClip, deleteAllClips } from '../api';
+import { formatDuration, formatDateTime, formatRelativeTime, deleteSingleClip, deleteAllClips } from '../api';
 import { formatChannelName } from '../utils/channels';
 
 const STAGE_LABELS = {
@@ -44,7 +44,7 @@ export default function Clips({
   const [channelFilter, setChannelFilter] = useState('');
   const [platformFilter, setPlatformFilter] = useState('');
   const [scoreFilter, setScoreFilter] = useState(0);
-  const [sortBy, setSortBy] = useState('score');
+  const [sortBy, setSortBy] = useState('newest');
   const [processingId, setProcessingId] = useState(null);
   const [clipToDelete, setClipToDelete] = useState(null);
   const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
@@ -54,7 +54,7 @@ export default function Clips({
   // Derive unique channels for filter
   const channels = Array.from(new Set(clips.map(c => c.channel))).filter(Boolean);
 
-  // Filter & sort
+  // Filter & sort (newest recorded first by default)
   const filteredClips = clips.filter(c => {
     if (channelFilter && c.channel.toLowerCase() !== channelFilter.toLowerCase()) return false;
     if (platformFilter && c.platform.toLowerCase() !== platformFilter.toLowerCase()) return false;
@@ -63,7 +63,9 @@ export default function Clips({
   }).sort((a, b) => {
     if (sortBy === 'score') return b.score - a.score;
     if (sortBy === 'duration') return b.duration - a.duration;
-    return (b.extracted_at || '').localeCompare(a.extracted_at || '');
+    const timeA = a.recorded_at_iso || a.extracted_at || '';
+    const timeB = b.recorded_at_iso || b.extracted_at || '';
+    return timeB.localeCompare(timeA);
   });
 
   const handleProcessSingle = async (clipId) => {
@@ -328,8 +330,8 @@ export default function Clips({
             onChange={(e) => setSortBy(e.target.value)}
             className="bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500"
           >
+            <option value="newest">Newest First</option>
             <option value="score">Highest Score</option>
-            <option value="date">Most Recent</option>
             <option value="duration">Longest Duration</option>
           </select>
         </div>
@@ -423,6 +425,14 @@ export default function Clips({
                       "{clip.quotes[0]}"
                     </p>
                   )}
+
+                  {/* Recorded date & time */}
+                  <div className="flex items-center space-x-1.5 text-[11px] text-slate-400 pt-1">
+                    <Clock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    <span>{formatDateTime(clip.recorded_at_iso || clip.extracted_at)}</span>
+                    <span className="text-slate-600">•</span>
+                    <span className="text-slate-500">{formatRelativeTime(clip.recorded_at_iso || clip.extracted_at)}</span>
+                  </div>
                 </div>
 
                 {/* Actions */}

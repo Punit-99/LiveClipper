@@ -496,9 +496,26 @@ class ShortsPipeline:
 
         privacy = privacy_status or self.settings.youtube_privacy_status
 
-        candidates = self.list_upload_candidates(channel=channel, min_score=min_score)
         if clip_id:
-            candidates = [c for c in candidates if c.get("clip_id") == clip_id]
+            record = self.manifest.get(clip_id)
+            if record:
+                # Check video path and resolve if relative or moved
+                video_str = record.get("short_video_path")
+                v_path = Path(video_str) if video_str else None
+                if not v_path or not v_path.is_file():
+                    for cand in self.settings.shorts_output_dir.rglob(f"{clip_id}*_short.mp4"):
+                        if cand.is_file():
+                            v_path = cand
+                            record["short_video_path"] = str(cand)
+                            break
+                if v_path and v_path.is_file():
+                    candidates = [record]
+                else:
+                    candidates = []
+            else:
+                candidates = []
+        else:
+            candidates = self.list_upload_candidates(channel=channel, min_score=min_score)
 
         uploaded_count = 0
         skipped_count = 0
@@ -511,7 +528,18 @@ class ShortsPipeline:
             score = candidate.get("highlight_score", 0)
             orig_title = candidate.get("title", "")
             video_path = Path(candidate["short_video_path"])
+            if not video_path.is_file():
+                for cand in self.settings.shorts_output_dir.rglob(f"{cid}*_short.mp4"):
+                    if cand.is_file():
+                        video_path = cand
+                        break
             sidecar_path = candidate.get("short_sidecar_path") or candidate.get("source_sidecar_path")
+            target_sidecar_path = Path(sidecar_path) if sidecar_path else None
+            if not target_sidecar_path or not target_sidecar_path.is_file():
+                for cand_sc in self.settings.shorts_output_dir.rglob(f"{cid}*_short.json"):
+                    if cand_sc.is_file():
+                        target_sidecar_path = cand_sc
+                        break
 
             # 1. Check daily quota before attempting upload
             if self.uploader.quota_tracker:
@@ -522,7 +550,6 @@ class ShortsPipeline:
 
             # 2. Resolve sidecar data
             sidecar_data: dict[str, Any] = {}
-            target_sidecar_path = Path(sidecar_path) if sidecar_path else None
             if target_sidecar_path and target_sidecar_path.is_file():
                 try:
                     with open(target_sidecar_path, "r", encoding="utf-8") as sfh:
@@ -646,6 +673,7 @@ class ShortsPipeline:
                     clip_id=cid,
                     state=STATE_UPLOADED,
                     youtube_video_id=yt_id,
+                    youtube_id=yt_id,
                     youtube_url=yt_url,
                     title=chosen_title,
                     selected_viral_title=chosen_title,

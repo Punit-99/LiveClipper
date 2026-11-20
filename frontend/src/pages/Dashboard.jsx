@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Play, 
   Square, 
@@ -13,29 +13,69 @@ import {
   Clock,
   Radio,
   ExternalLink,
-  RefreshCw
+  RefreshCw,
+  Tv,
+  Check,
+  X,
+  Activity,
+  Layers,
+  MessageSquare,
+  ThumbsUp,
+  ThumbsDown,
+  Loader2
 } from 'lucide-react';
-import { formatBytes, formatDuration } from '../api';
+import { formatBytes, formatDuration, fetchChannelsLiveStatus } from '../api';
 import { formatChannelName } from '../utils/channels';
 
 export default function Dashboard({ 
   status, 
   quota, 
+  settings,
   highlights = [], 
   clips = [], 
   shorts = [], 
   onStartMonitoring, 
   onStopMonitoring, 
+  onApproveFallback,
+  onWaitTarget,
   onNavigate,
   onRefresh 
 }) {
-  const [platformOverride, setPlatformOverride] = useState('');
-  const [channelsInput, setChannelsInput] = useState('');
+  const [showLiveStatusModal, setShowLiveStatusModal] = useState(false);
+  const [liveStatusList, setLiveStatusList] = useState([]);
+  const [isLoadingLiveStatus, setIsLoadingLiveStatus] = useState(false);
+
+  // Channel selection modal for "Start Monitoring"
+  const [showChannelModal, setShowChannelModal] = useState(false);
+  const [selectedChannels, setSelectedChannels] = useState([]);
+  const [isStartingMonitoring, setIsStartingMonitoring] = useState(false);
+
+  // Fallback streams state
+  const fallbackStreams = status?.fallback_streams || [];
+  const waitingTargetChannels = status?.waiting_target_channels;
 
   const isMonitoring = status?.is_monitoring;
   const activeChannels = status?.active_channels || [];
   const targetChannels = status?.target_channels || [];
   const uptime = status?.uptime_seconds || 0;
+  const sessions = status?.sessions || {};
+
+  // Live Stats Panel values
+  const liveStats = status?.live_stats || {};
+  const segmentsCount = liveStats.segments || 0;
+  const chatMessagesCount = liveStats.chat_messages || 0;
+  const highlightsDetected = liveStats.highlights_detected || highlights.length;
+  const highlightsApproved = liveStats.highlights_approved || 0;
+  const highlightsRejected = liveStats.highlights_rejected || 0;
+  const clipsExtractedCount = liveStats.clips_extracted || clips.length;
+  const recordingDuration = liveStats.duration_seconds || uptime;
+  const bufferMb = liveStats.buffer_mb || 0;
+
+  // Max concurrent streams setting
+  const isMultiStream = settings?.multi_stream_enabled === true;
+  const maxConcurrentStreams = isMultiStream 
+    ? (Number(settings?.max_concurrent_streams) || 2) 
+    : 1;
 
   // Disk breakdown
   const disk = status?.disk || {};
@@ -53,17 +93,157 @@ export default function Dashboard({
   // Gemini stats
   const gemini = status?.gemini || {};
 
-  const handleStart = () => {
-    const payload = {};
-    if (platformOverride) payload.platform = platformOverride;
-    if (channelsInput.trim()) {
-      payload.channels = channelsInput.split(',').map(c => c.trim()).filter(Boolean);
+  // Handler: Manual Check Live Status button
+  const handleCheckLiveStatus = async () => {
+    setIsLoadingLiveStatus(true);
+    setShowLiveStatusModal(true);
+    try {
+      const data = await fetchChannelsLiveStatus();
+      setLiveStatusList(data.channels || []);
+    } catch (err) {
+      console.error('Failed to fetch channel live status:', err);
+    } finally {
+      setIsLoadingLiveStatus(false);
     }
-    onStartMonitoring(payload);
+  };
+
+  // Handler: Open Channel Selection Modal when user clicks "Start Monitoring"
+  const handleOpenStartModal = async () => {
+    setIsLoadingLiveStatus(true);
+    setShowChannelModal(true);
+    try {
+      const data = await fetchChannelsLiveStatus();
+      const channels = data.channels || [];
+      setLiveStatusList(channels);
+      // Auto-check live channels by default
+      const liveIds = channels.filter(c => c.is_live).map(c => c.id);
+      setSelectedChannels(liveIds.slice(0, maxConcurrentStreams));
+    } catch (err) {
+      console.error('Failed to fetch channels for modal:', err);
+    } finally {
+      setIsLoadingLiveStatus(false);
+    }
+  };
+
+  const handleToggleChannel = (channelId) => {
+    if (!isMultiStream || maxConcurrentStreams === 1) {
+      setSelectedChannels(prev => (prev.includes(channelId) ? [] : [channelId]));
+      return;
+    }
+    setSelectedChannels(prev => {
+      if (prev.includes(channelId)) {
+        return prev.filter(id => id !== channelId);
+      } else {
+        return [...prev, channelId];
+      }
+    });
+  };
+
+  const handleConfirmStartMonitoring = async () => {
+    if (selectedChannels.length > maxConcurrentStreams) return;
+    setIsStartingMonitoring(true);
+    try {
+      await onStartMonitoring({
+        channels: selectedChannels,
+        platform: 'all',
+      });
+      setShowChannelModal(false);
+    } finally {
+      setIsStartingMonitoring(false);
+    }
   };
 
   return (
     <div className="space-y-6">
+      {/* 1. Fallback Stream Approval Banner (Requirement 1) */}
+      {fallbackStreams.length > 0 && !isMonitoring && (
+        <div className="p-5 rounded-2xl bg-amber-950/40 border border-amber-500/50 text-amber-200 shadow-xl shadow-amber-500/5 animate-in fade-in duration-300">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+            <div className="flex items-start space-x-3">
+              <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 mt-0.5 shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-amber-100">
+                  None of your target channels are live.
+                </h3>
+                <p className="text-xs text-amber-300/90 mt-0.5">
+                  Found these active category live streams instead. Select one to approve and start monitoring, or choose to wait for your target channels. Until approved, no recording starts.
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={onWaitTarget}
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 transition-colors shrink-0"
+            >
+              Wait for target channels
+            </button>
+          </div>
+
+          {/* List of discovered fallback streams */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {fallbackStreams.map((stream, idx) => (
+              <div
+                key={stream.channel_id || idx}
+                className="bg-[#182030] border border-[#24334f] rounded-xl p-3.5 flex items-center justify-between gap-3 hover:border-amber-500/40 transition-colors"
+              >
+                <div className="space-y-1 min-w-0">
+                  <div className="flex items-center space-x-2">
+                    {stream.platform === 'youtube' ? (
+                      <Youtube className="w-4 h-4 text-red-400 shrink-0" />
+                    ) : (
+                      <Tv className="w-4 h-4 text-purple-400 shrink-0" />
+                    )}
+                    <span className="font-bold text-sm text-white truncate">
+                      {formatChannelName(stream.channel_name || stream.channel_id)}
+                    </span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">
+                      Fallback
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-300 line-clamp-1" title={stream.stream_title}>
+                    {stream.stream_title || 'Live Stream'}
+                  </div>
+                  <div className="flex items-center space-x-2 text-[11px] text-slate-400">
+                    <span className="text-emerald-400 font-bold">{Number(stream.viewer_count || 0).toLocaleString()} viewers</span>
+                    <span>•</span>
+                    <span className="uppercase font-semibold">{stream.language || 'en'}</span>
+                    <span>•</span>
+                    <span>{stream.category || 'Gaming'}</span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => onApproveFallback(stream.channel_id)}
+                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold rounded-lg transition-all shadow-md shrink-0"
+                >
+                  Approve
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Waiting for target channels banner */}
+      {waitingTargetChannels && !isMonitoring && fallbackStreams.length === 0 && (
+        <div className="p-4 rounded-xl bg-blue-950/40 border border-blue-500/40 text-blue-200 flex items-center justify-between gap-3 text-xs">
+          <div className="flex items-center space-x-2.5">
+            <Radio className="w-4 h-4 text-blue-400 animate-pulse shrink-0" />
+            <span>
+              Target channels are currently offline. Automatically polling targets in the background and will start recording as soon as one goes live.
+            </span>
+          </div>
+          <button
+            onClick={onRefresh}
+            className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-semibold shrink-0"
+          >
+            Check Now
+          </button>
+        </div>
+      )}
+
       {/* Top Banner & Quick Controls */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Monitoring Status Card */}
@@ -93,13 +273,24 @@ export default function Dashboard({
             </div>
 
             <div className="flex items-center space-x-2">
+              {/* Check Live Status Button (Requirement 2) */}
+              <button
+                onClick={handleCheckLiveStatus}
+                className="flex items-center space-x-1.5 px-3 py-2 text-xs font-semibold text-slate-200 bg-[#1a2233] hover:bg-[#25324d] rounded-xl transition-colors border border-[#1f293d]"
+                title="Check which channels are live"
+              >
+                <Activity className="w-3.5 h-3.5 text-blue-400" />
+                <span>Check Live Status</span>
+              </button>
+
               <button
                 onClick={onRefresh}
-                className="p-2 text-slate-400 hover:text-white bg-[#1a2233] hover:bg-[#25324d] rounded-lg transition-colors border border-[#1f293d]"
+                className="p-2 text-slate-400 hover:text-white bg-[#1a2233] hover:bg-[#25324d] rounded-xl transition-colors border border-[#1f293d]"
                 title="Refresh stats"
               >
                 <RefreshCw className="w-4 h-4" />
               </button>
+
               {isMonitoring ? (
                 <button
                   onClick={onStopMonitoring}
@@ -110,7 +301,7 @@ export default function Dashboard({
                 </button>
               ) : (
                 <button
-                  onClick={handleStart}
+                  onClick={handleOpenStartModal}
                   className="flex items-center space-x-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-xl text-sm transition-all shadow-lg shadow-emerald-500/20"
                 >
                   <Play className="w-4 h-4 fill-current" />
@@ -120,28 +311,83 @@ export default function Dashboard({
             </div>
           </div>
 
-          {/* Active channels pills */}
-          <div className="space-y-3 pt-2 border-t border-[#1f293d]/60">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span>Target Channels ({activeChannels.length ? activeChannels.length : targetChannels.length})</span>
-              <span>Platform: <span className="font-semibold text-slate-200 capitalize">{status?.platform || 'Twitch'}</span></span>
-            </div>
+          {/* Monitored Streamers Cards with Yellow "Fallback" or Green "Target" Badges (Requirement 7) */}
+          {isMonitoring && Object.keys(sessions).length > 0 ? (
+            <div className="space-y-3 pt-3 border-t border-[#1f293d]/60">
+              <div className="flex items-center justify-between text-xs text-slate-400">
+                <span className="font-semibold text-slate-300">Monitored Streamers ({Object.keys(sessions).length})</span>
+                <span className="text-[11px] text-slate-400">Recording live stream video & chat</span>
+              </div>
 
-            <div className="flex flex-wrap gap-2">
-              {(activeChannels.length > 0 ? activeChannels : targetChannels).map((ch, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-[#182030] border border-[#24334f] text-xs font-medium text-slate-200"
-                >
-                  <span className={`w-2 h-2 rounded-full ${isMonitoring ? 'bg-emerald-400' : 'bg-slate-500'}`} />
-                  <span>{formatChannelName(ch)}</span>
-                </div>
-              ))}
-              {!activeChannels.length && !targetChannels.length && (
-                <span className="text-xs text-slate-500 italic">No target channels configured in .env</span>
-              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {Object.entries(sessions).map(([ch, sessData]) => {
+                  const isFallback = sessData.badge === 'Fallback' || sessData.is_fallback;
+                  const isYouTube = sessData.platform === 'youtube';
+
+                  return (
+                    <div
+                      key={ch}
+                      className="bg-[#182030] border border-[#24334f] rounded-xl p-3 flex items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center space-x-2.5 min-w-0">
+                        {isYouTube ? (
+                          <Youtube className="w-5 h-5 text-red-500 shrink-0" />
+                        ) : (
+                          <Tv className="w-5 h-5 text-purple-400 shrink-0" />
+                        )}
+                        <div className="min-w-0">
+                          <div className="flex items-center space-x-2">
+                            <span className="font-bold text-sm text-white truncate">{ch}</span>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-black uppercase ${
+                              isFallback
+                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            }`}>
+                              {isFallback ? 'Fallback' : 'Target'}
+                            </span>
+                          </div>
+                          <div className="flex items-center space-x-2 text-[11px] text-slate-400 mt-0.5">
+                            <span className="text-emerald-400 font-semibold">{sessData.viewers ? `${Number(sessData.viewers).toLocaleString()} viewers` : 'Live'}</span>
+                            <span>•</span>
+                            <span>{sessData.segments_registered || 0} segments</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <span className="text-xs font-mono font-bold text-slate-200">
+                          {formatDuration(sessData.duration_seconds || uptime)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          ) : (
+            /* Target channels pills when stopped */
+            <div className="space-y-3 pt-2 border-t border-[#1f293d]/60">
+              <div className="flex items-center justify-between text-xs text-slate-400">
+                <span>Configured Target Channels ({targetChannels.length})</span>
+                <span>Platform: <span className="font-semibold text-slate-200 capitalize">{status?.platform || 'All'}</span></span>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {targetChannels.map((ch, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-[#182030] border border-[#24334f] text-xs font-medium text-slate-200"
+                  >
+                    <span className="w-2 h-2 rounded-full bg-slate-500" />
+                    <span>{formatChannelName(ch)}</span>
+                  </div>
+                ))}
+                {!targetChannels.length && (
+                  <span className="text-xs text-slate-500 italic">No target channels configured in .env</span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* YouTube Quota & Status Card */}
@@ -202,50 +448,82 @@ export default function Dashboard({
         </div>
       </div>
 
-      {/* 4 Metrics Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-[#121722] border border-[#1f293d] rounded-xl p-5 flex items-center space-x-4">
-          <div className="w-12 h-12 rounded-xl bg-purple-500/10 text-purple-400 border border-purple-500/20 flex items-center justify-center">
-            <Sparkles className="w-6 h-6" />
+      {/* 5. Dashboard Live Stats Panel with Live Counters (Requirement 10) */}
+      <div className="bg-[#121722] border border-[#1f293d] rounded-2xl p-6 space-y-4">
+        <div className="flex items-center justify-between border-b border-[#1f293d]/60 pb-3">
+          <div className="flex items-center space-x-2 text-white font-bold">
+            <Activity className="w-5 h-5 text-emerald-400" />
+            <span>Live Recording & Extraction Stats</span>
           </div>
-          <div>
-            <div className="text-2xl font-black text-white">{highlights.length}</div>
-            <div className="text-xs text-slate-400">Highlights Detected</div>
-          </div>
+          <span className="text-xs text-slate-400">
+            Active Duration: <strong className="text-emerald-400 font-mono">{formatDuration(recordingDuration)}</strong>
+          </span>
         </div>
 
-        <div className="bg-[#121722] border border-[#1f293d] rounded-xl p-5 flex items-center space-x-4">
-          <div className="w-12 h-12 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center justify-center">
-            <Video className="w-6 h-6" />
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          {/* Segments Counter */}
+          <div className="bg-[#182030] p-3 rounded-xl border border-[#24334f]">
+            <div className="flex items-center space-x-1.5 text-xs text-slate-400 mb-1">
+              <Layers className="w-3.5 h-3.5 text-blue-400" />
+              <span>Segments</span>
+            </div>
+            <div className="text-xl font-black text-white">{segmentsCount}</div>
+            <div className="text-[10px] text-slate-500">Recorded chunks</div>
           </div>
-          <div>
-            <div className="text-2xl font-black text-white">{clips.length}</div>
-            <div className="text-xs text-slate-400">Clips Extracted</div>
-          </div>
-        </div>
 
-        <div className="bg-[#121722] border border-[#1f293d] rounded-xl p-5 flex items-center space-x-4">
-          <div className="w-12 h-12 rounded-xl bg-red-500/10 text-red-400 border border-red-500/20 flex items-center justify-center">
-            <Film className="w-6 h-6" />
+          {/* Buffer Size */}
+          <div className="bg-[#182030] p-3 rounded-xl border border-[#24334f]">
+            <div className="flex items-center space-x-1.5 text-xs text-slate-400 mb-1">
+              <HardDrive className="w-3.5 h-3.5 text-amber-400" />
+              <span>Buffer Used</span>
+            </div>
+            <div className="text-xl font-black text-amber-300">{bufferMb} MB</div>
+            <div className="text-[10px] text-slate-500">Rolling ring buffer</div>
           </div>
-          <div>
-            <div className="text-2xl font-black text-white">{shorts.length}</div>
-            <div className="text-xs text-slate-400">Vertical Shorts Ready</div>
-          </div>
-        </div>
 
-        <div className="bg-[#121722] border border-[#1f293d] rounded-xl p-5 flex items-center space-x-4">
-          <div className="w-12 h-12 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center">
-            <BrainCircuit className="w-6 h-6" />
+          {/* Highlights Detected (Spikes) */}
+          <div className="bg-[#182030] p-3 rounded-xl border border-[#24334f]">
+            <div className="flex items-center space-x-1.5 text-xs text-slate-400 mb-1">
+              <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+              <span>Spikes</span>
+            </div>
+            <div className="text-xl font-black text-white">{highlightsDetected}</div>
+            <div className="text-[10px] text-slate-500">Chat spikes</div>
           </div>
-          <div>
-            <div className="text-2xl font-black text-white">{gemini.analyzed || 0}</div>
-            <div className="text-xs text-slate-400">AI Analyses Completed</div>
+
+          {/* Highlights Approved */}
+          <div className="bg-[#182030] p-3 rounded-xl border border-[#24334f]">
+            <div className="flex items-center space-x-1.5 text-xs text-slate-400 mb-1">
+              <ThumbsUp className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Approved</span>
+            </div>
+            <div className="text-xl font-black text-emerald-400">{highlightsApproved}</div>
+            <div className="text-[10px] text-slate-500">Gemini score &gt;= 65</div>
+          </div>
+
+          {/* Highlights Rejected */}
+          <div className="bg-[#182030] p-3 rounded-xl border border-[#24334f]">
+            <div className="flex items-center space-x-1.5 text-xs text-slate-400 mb-1">
+              <ThumbsDown className="w-3.5 h-3.5 text-slate-500" />
+              <span>Rejected</span>
+            </div>
+            <div className="text-xl font-black text-slate-400">{highlightsRejected}</div>
+            <div className="text-[10px] text-slate-500">Below threshold</div>
+          </div>
+
+          {/* Clips Extracted */}
+          <div className="bg-[#182030] p-3 rounded-xl border border-[#24334f]">
+            <div className="flex items-center space-x-1.5 text-xs text-slate-400 mb-1">
+              <Film className="w-3.5 h-3.5 text-blue-400" />
+              <span>Clips</span>
+            </div>
+            <div className="text-xl font-black text-blue-400">{clipsExtractedCount}</div>
+            <div className="text-[10px] text-slate-500">Extracted MP4s</div>
           </div>
         </div>
       </div>
 
-      {/* Disk Usage & Gemini Status */}
+      {/* Disk Space & AI Worker Status */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Disk Usage Breakdown */}
         <div className="bg-[#121722] border border-[#1f293d] rounded-2xl p-6">
@@ -332,63 +610,237 @@ export default function Dashboard({
         </div>
       </div>
 
-      {/* Recent Highlights Feed */}
-      <div className="bg-[#121722] border border-[#1f293d] rounded-2xl p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center space-x-2 text-white font-bold">
-            <Sparkles className="w-5 h-5 text-amber-400" />
-            <span>Recent High-Scoring Highlights</span>
+      {/* Channel Selection Modal (Requirement 3 & 8) */}
+      {showChannelModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#121722] border border-[#1f293d] rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="p-5 border-b border-[#1f293d] flex items-center justify-between bg-[#182030]">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center space-x-2">
+                  <Play className="w-4 h-4 text-emerald-400" />
+                  <span>Choose Channels to Monitor</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Select up to {maxConcurrentStreams} live stream{maxConcurrentStreams === 1 ? '' : 's'} to monitor concurrently.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowChannelModal(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Selection limit warning */}
+            {selectedChannels.length > maxConcurrentStreams && (
+              <div className="mx-5 mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl flex items-center space-x-2 text-xs text-red-300">
+                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>
+                  Limit exceeded: you selected {selectedChannels.length} streams, max is {maxConcurrentStreams}. Change MAX_CONCURRENT_STREAMS in Settings to record more.
+                </span>
+              </div>
+            )}
+
+            {/* Zero selected warning */}
+            {selectedChannels.length === 0 && !isLoadingLiveStatus && (
+              <div className="mx-5 mt-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-center space-x-2 text-xs text-amber-300">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>No channels selected. Choose at least one live channel.</span>
+              </div>
+            )}
+
+            <div className="p-5 overflow-y-auto space-y-2 flex-1">
+              {isLoadingLiveStatus ? (
+                <div className="py-8 flex flex-col items-center justify-center text-slate-400 space-y-2">
+                  <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
+                  <span className="text-xs">Checking live status of configured channels...</span>
+                </div>
+              ) : liveStatusList.length > 0 ? (
+                liveStatusList.map((ch) => {
+                  const isChecked = selectedChannels.includes(ch.id);
+                  const isLive = ch.is_live;
+
+                  return (
+                    <div
+                      key={ch.id}
+                      onClick={() => isLive && handleToggleChannel(ch.id)}
+                      className={`p-3 rounded-xl border flex items-center justify-between transition-all ${
+                        !isLive
+                          ? 'bg-[#141924]/50 border-[#1f293d]/50 opacity-60 cursor-not-allowed'
+                          : isChecked
+                          ? 'bg-blue-600/10 border-blue-500/50 cursor-pointer'
+                          : 'bg-[#182030] border-[#24334f] hover:border-slate-500 cursor-pointer'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-3 min-w-0">
+                        <input
+                          type={(!isMultiStream || maxConcurrentStreams === 1) ? "radio" : "checkbox"}
+                          name="channel-select"
+                          checked={isChecked}
+                          disabled={!isLive}
+                          onChange={() => {}}
+                          className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-blue-600 focus:ring-0 focus:ring-offset-0 disabled:opacity-40"
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center space-x-2">
+                            {ch.platform === 'youtube' ? (
+                              <Youtube className="w-4 h-4 text-red-400 shrink-0" />
+                            ) : (
+                              <Tv className="w-4 h-4 text-purple-400 shrink-0" />
+                            )}
+                            <span className="font-bold text-sm text-white truncate">
+                              {formatChannelName(ch.name || ch.id)}
+                            </span>
+                          </div>
+                          {ch.title && (
+                            <p className="text-[11px] text-slate-300 truncate mt-0.5" title={ch.title}>
+                              {ch.title}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-2 shrink-0">
+                        {isLive ? (
+                          <div className="flex items-center space-x-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                            <span>LIVE</span>
+                            {ch.viewers > 0 && <span className="text-emerald-300">({Number(ch.viewers).toLocaleString()})</span>}
+                          </div>
+                        ) : (
+                          <div className="flex items-center space-x-1 px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-xs font-semibold">
+                            <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+                            <span>Offline</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="text-center py-6 text-slate-400 text-xs">
+                  No channels configured. Add target channels in Settings or .env.
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-[#1f293d] bg-[#182030] flex items-center justify-between">
+              <span className="text-xs text-slate-400 font-semibold">
+                {selectedChannels.length} of {liveStatusList.length} streams selected (max: {maxConcurrentStreams})
+              </span>
+
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => setShowChannelModal(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleConfirmStartMonitoring}
+                  disabled={isStartingMonitoring || selectedChannels.length === 0 || selectedChannels.length > maxConcurrentStreams}
+                  className="flex items-center space-x-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl transition-all shadow-md shadow-emerald-500/20"
+                >
+                  {isStartingMonitoring ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Starting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>Start Monitoring Selected</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
-          <button
-            onClick={() => onNavigate('live')}
-            className="text-xs text-blue-400 hover:text-blue-300 font-medium flex items-center space-x-1"
-          >
-            <span>View Live Feed</span>
-            <ExternalLink className="w-3.5 h-3.5" />
-          </button>
         </div>
+      )}
 
-        <div className="space-y-3">
-          {highlights.slice(0, 5).map((hl, idx) => (
-            <div
-              key={hl.event_id || idx}
-              className="bg-[#182030] border border-[#24334f] rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-slate-600 transition-colors"
-            >
-              <div className="space-y-1">
-                <div className="flex items-center space-x-2">
-                  <span className="px-2 py-0.5 rounded text-xs font-bold bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                    {formatChannelName(hl.streamer_name || hl.stream_id)}
-                  </span>
-                  <span className="text-xs text-slate-400 capitalize">{hl.category?.replace('_', ' ')}</span>
-                  <span className="text-xs text-slate-500">• {formatDuration(hl.duration_seconds)}</span>
-                </div>
-                <h4 className="text-sm font-semibold text-slate-100">{hl.title || 'Untitled Stream Highlight'}</h4>
-                {hl.key_quotes && hl.key_quotes.length > 0 && (
-                  <p className="text-xs text-slate-400 italic line-clamp-1">
-                    "{hl.key_quotes[0]}"
-                  </p>
-                )}
+      {/* Manual Live Status Check Modal (Requirement 2) */}
+      {showLiveStatusModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#121722] border border-[#1f293d] rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="p-5 border-b border-[#1f293d] flex items-center justify-between bg-[#182030]">
+              <div className="flex items-center space-x-2 text-white font-bold">
+                <Activity className="w-5 h-5 text-blue-400" />
+                <span>Configured Channels Live Status</span>
               </div>
+              <button
+                onClick={() => setShowLiveStatusModal(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-              <div className="flex items-center space-x-3 self-end sm:self-center">
-                <div className={`px-3 py-1 rounded-lg text-xs font-black ${
-                  (hl.highlight_score || 0) >= 80 
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                }`}>
-                  {hl.highlight_score || 0}/100
+            <div className="p-5 overflow-y-auto space-y-2.5 flex-1">
+              {isLoadingLiveStatus ? (
+                <div className="py-8 flex flex-col items-center justify-center text-slate-400 space-y-2">
+                  <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
+                  <span className="text-xs">Checking live status of YouTube and Twitch channels...</span>
                 </div>
-              </div>
-            </div>
-          ))}
+              ) : liveStatusList.length > 0 ? (
+                liveStatusList.map((ch) => (
+                  <div
+                    key={ch.id}
+                    className="p-3 bg-[#182030] border border-[#24334f] rounded-xl flex items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center space-x-2">
+                        {ch.platform === 'youtube' ? (
+                          <Youtube className="w-4 h-4 text-red-400 shrink-0" />
+                        ) : (
+                          <Tv className="w-4 h-4 text-purple-400 shrink-0" />
+                        )}
+                        <span className="font-bold text-sm text-white truncate">
+                          {formatChannelName(ch.name || ch.id)}
+                        </span>
+                      </div>
+                      {ch.title && (
+                        <p className="text-[11px] text-slate-300 truncate mt-0.5" title={ch.title}>
+                          {ch.title}
+                        </p>
+                      )}
+                    </div>
 
-          {!highlights.length && (
-            <div className="text-center py-8 text-slate-500 text-sm">
-              No highlights analyzed yet. Start monitoring to detect live stream moments!
+                    <div className="flex items-center space-x-2 shrink-0">
+                      {ch.is_live ? (
+                        <div className="flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-bold">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                          <span>LIVE</span>
+                          {ch.viewers > 0 && <span className="text-emerald-300">({Number(ch.viewers).toLocaleString()})</span>}
+                        </div>
+                      ) : (
+                        <div className="flex items-center space-x-1.5 px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-xs font-semibold">
+                          <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+                          <span>OFFLINE</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="text-center py-6 text-slate-400 text-xs">
+                  No channels configured.
+                </div>
+              )}
             </div>
-          )}
+
+            <div className="p-4 border-t border-[#1f293d] bg-[#182030] flex justify-end">
+              <button
+                onClick={() => setShowLiveStatusModal(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

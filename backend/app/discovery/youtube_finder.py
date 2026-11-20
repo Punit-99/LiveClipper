@@ -374,3 +374,91 @@ class YouTubeStreamFinder:
                 streams.append(stream)
 
         return streams
+
+
+def check_youtube_channel_live_status(
+    channel_id: str,
+    token_manager: YouTubeTokenManager | None = None,
+    api_key: str | None = None,
+    session: requests.Session | None = None,
+) -> dict[str, Any]:
+    """Check live status of a single YouTube channel.
+
+    Returns a dict with:
+      id, name, platform, is_live, viewers, title, category, language, video_id
+    """
+    clean_id = (channel_id or "").strip()
+    c_name = resolve_channel_name(clean_id)
+
+    default_result: dict[str, Any] = {
+        "id": clean_id,
+        "name": c_name,
+        "platform": "youtube",
+        "is_live": False,
+        "viewers": 0,
+        "title": "",
+        "category": "Gaming",
+        "language": "en",
+        "video_id": None,
+    }
+
+    if not clean_id:
+        return default_result
+
+    # 1. Try official API if credentials exist
+    try:
+        has_auth = (token_manager and token_manager.has_tokens()) or bool(api_key)
+        if has_auth:
+            finder = YouTubeStreamFinder(token_manager=token_manager, api_key=api_key, session=session)
+            streams = finder.check_priority_channels([clean_id])
+            if streams:
+                s = streams[0]
+                register_channel_name(clean_id, s.channel_name)
+                return {
+                    "id": clean_id,
+                    "name": s.channel_name or c_name,
+                    "platform": "youtube",
+                    "is_live": True,
+                    "viewers": s.viewer_count,
+                    "title": s.stream_title,
+                    "category": "Gaming",
+                    "language": s.language or "en",
+                    "video_id": s.video_id,
+                }
+    except Exception as exc:
+        log.debug("YouTube API live check failed for %s: %s", clean_id, exc)
+
+    # 2. Try HTTP redirect /live check
+    http_sess = session or requests.Session()
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+        }
+        url = f"https://www.youtube.com/channel/{clean_id}/live"
+        resp = http_sess.get(url, headers=headers, timeout=5, allow_redirects=True)
+        if resp.status_code == 200 and "/watch?v=" in resp.url:
+            vid = resp.url.split("/watch?v=")[-1].split("&")[0]
+            title = ""
+            if '<meta property="og:title" content="' in resp.text:
+                title = resp.text.split('<meta property="og:title" content="', 1)[1].split('"', 1)[0]
+            elif '<title>' in resp.text:
+                title = resp.text.split("<title>", 1)[1].split("</title>", 1)[0]
+            return {
+                "id": clean_id,
+                "name": c_name,
+                "platform": "youtube",
+                "is_live": True,
+                "viewers": 0,
+                "title": title or "YouTube Live Stream",
+                "category": "Gaming",
+                "language": "en",
+                "video_id": vid,
+            }
+    except Exception as exc:
+        log.debug("YouTube live URL redirect check failed for %s: %s", clean_id, exc)
+
+    return default_result
+

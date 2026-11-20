@@ -9,17 +9,10 @@ import {
   Sparkles, 
   X, 
   Loader2, 
-  ChevronDown, 
-  ChevronUp, 
-  Tag, 
-  FileText,
-  ThumbsUp,
-  MessageSquare,
-  Share2,
   Trash2,
   AlertTriangle
 } from 'lucide-react';
-import { formatDuration, deleteSingleShort, deleteAllShorts } from '../api';
+import { formatDuration, formatDateTime, formatRelativeTime, deleteSingleShort, deleteAllShorts } from '../api';
 import { formatChannelName } from '../utils/channels';
 
 export default function Shorts({ 
@@ -34,8 +27,6 @@ export default function Shorts({
   showToast
 }) {
   const [selectedShort, setSelectedShort] = useState(null);
-  const [expandedDescId, setExpandedDescId] = useState(null);
-  const [activeTitles, setActiveTitles] = useState({});
   const [uploadingId, setUploadingId] = useState(null);
   const [privacyMap, setPrivacyMap] = useState({});
   const [shortToDelete, setShortToDelete] = useState(null);
@@ -43,17 +34,13 @@ export default function Shorts({
   const [deletingId, setDeletingId] = useState(null);
   const [isDeletingAll, setIsDeletingAll] = useState(false);
 
-  const handleSelectTitle = (shortId, title) => {
-    setActiveTitles(prev => ({ ...prev, [shortId]: title }));
-  };
-
   const handlePrivacyChange = (shortId, privacy) => {
     setPrivacyMap(prev => ({ ...prev, [shortId]: privacy }));
   };
 
   const handleUploadSingle = async (short) => {
     setUploadingId(short.id);
-    const chosenTitle = activeTitles[short.id] || short.selected_title;
+    const chosenTitle = short.selected_title || short.title;
     const privacy = privacyMap[short.id] || 'public';
     try {
       await onUploadSingle(short.id, {
@@ -105,7 +92,7 @@ export default function Shorts({
 
   return (
     <div className="space-y-6">
-      {/* Header and Batch Upload */}
+      {/* Header and Batch Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#121722] border border-[#1f293d] rounded-2xl p-6">
         <div>
           <h2 className="text-xl font-bold text-white flex items-center space-x-2">
@@ -115,7 +102,7 @@ export default function Shorts({
             </span>
           </h2>
           <p className="text-xs text-slate-400 mt-1">
-            9:16 vertical reframed Shorts with animated captions and hook titles ready for publication.
+            Vertical 9:16 reframed Shorts optimized for YouTube.
           </p>
         </div>
 
@@ -140,7 +127,7 @@ export default function Shorts({
 
           <button
             onClick={onUploadAll}
-            disabled={isUploading || !shorts.length || !quota?.can_upload}
+            disabled={isUploading || !shorts.length || (quota && quota.can_upload === false)}
             className="flex items-center space-x-2 px-5 py-2.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl text-sm transition-all shadow-lg shadow-red-500/20"
           >
             {isUploading ? (
@@ -158,14 +145,13 @@ export default function Shorts({
         </div>
       </div>
 
-      {/* Grid of 9:16 Shorts Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      {/* Grid of Clean Vertical 9:16 Shorts Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
         {shorts.map((short) => {
-          const currentTitle = activeTitles[short.id] || short.selected_title;
-          const isUploaded = short.state === 'UPLOADED' || Boolean(short.youtube_url);
+          const isUploaded = short.state === 'UPLOADED' || Boolean(short.youtube_url) || Boolean(short.youtube_id);
           const isUploadingThis = uploadingId === short.id;
-          const isExpanded = expandedDescId === short.id;
           const currentPrivacy = privacyMap[short.id] || 'public';
+          const viralTitle = short.selected_title || short.title || 'Live Stream Highlight';
 
           return (
             <div
@@ -174,10 +160,10 @@ export default function Shorts({
                 deletingId === short.id ? 'opacity-0 scale-95 pointer-events-none' : 'opacity-100 scale-100'
               }`}
             >
-              {/* Vertical 9:16 Video Preview Header */}
+              {/* Vertical 9:16 Video Thumbnail Container */}
               <div 
                 className="relative bg-black flex items-center justify-center cursor-pointer group/vid overflow-hidden"
-                style={{ aspectRatio: '9 / 12' }}
+                style={{ aspectRatio: '9 / 16' }}
                 onClick={() => setSelectedShort(short)}
               >
                 <video
@@ -193,7 +179,7 @@ export default function Shorts({
                   </div>
                 </div>
 
-                {/* Top Overlay Badges */}
+                {/* Top Overlay Badges: Channel Name & Score Badge */}
                 <div className="absolute top-3 left-3 right-3 flex items-center justify-between z-10">
                   <span className="bg-black/80 backdrop-blur-md px-2.5 py-1 rounded-lg text-xs font-semibold text-white">
                     {formatChannelName(short.channel)}
@@ -208,7 +194,7 @@ export default function Shorts({
                         setShortToDelete(short);
                       }}
                       title="Delete Short"
-                      className="p-1.5 rounded-lg bg-black/60 backdrop-blur-md text-slate-400 hover:text-red-400 hover:bg-red-500/20 transition-all shadow-md group/trash"
+                      className="p-1.5 rounded-lg bg-black/60 backdrop-blur-md text-slate-400 hover:text-red-400 hover:bg-red-500/20 transition-all shadow-md"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -220,133 +206,85 @@ export default function Shorts({
                   {formatDuration(short.duration)}
                 </div>
 
-                {/* Engine Badge */}
-                <div className="absolute bottom-3 left-3 bg-black/80 px-2 py-0.5 rounded text-[10px] uppercase font-bold text-slate-300">
-                  {short.processing_engine || 'openshorts'}
-                </div>
+                {/* Upload Status Overlay if already uploaded */}
+                {isUploaded && (
+                  <div className="absolute bottom-3 left-3 flex items-center space-x-1 bg-emerald-600/90 backdrop-blur-md px-2 py-0.5 rounded text-[11px] font-bold text-white shadow-md">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Uploaded</span>
+                  </div>
+                )}
               </div>
 
               {/* Card Body */}
-              <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
-                {/* Viral Title Selection Section */}
-                <div className="space-y-3">
-                  <div>
-                    <label className="text-[11px] uppercase tracking-wider font-bold text-slate-400 mb-1.5 flex items-center space-x-1">
-                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Select Viral Title</span>
-                    </label>
-                    <div className="text-sm font-bold text-white bg-[#182030] p-3 rounded-xl border border-[#24334f]">
-                      {currentTitle}
+              <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                <div className="space-y-2">
+                  {/* Viral Title */}
+                  <h3 className="font-bold text-sm text-slate-100 line-clamp-2" title={viralTitle}>
+                    {viralTitle}
+                  </h3>
+
+                  {/* Dates Recorded & Processed */}
+                  <div className="space-y-1 text-[11px] text-slate-400 pt-1 border-t border-[#1f293d]/60">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-500">Recorded:</span>
+                      <span className="text-slate-300 font-medium">{formatDateTime(short.recorded_at_iso) || 'Recent stream'}</span>
                     </div>
-                  </div>
-
-                  {/* 3 Alternate Viral Title Options */}
-                  {short.viral_titles && short.viral_titles.length > 0 && (
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] text-slate-500 font-semibold uppercase">AI Suggestions:</span>
-                      <div className="flex flex-col gap-1.5">
-                        {short.viral_titles.slice(0, 3).map((vt, vIdx) => {
-                          const tText = typeof vt === 'object' ? vt.title : vt;
-                          const isSelected = tText === currentTitle;
-                          return (
-                            <button
-                              key={vIdx}
-                              onClick={() => handleSelectTitle(short.id, tText)}
-                              className={`text-left text-xs p-2 rounded-lg border transition-all ${
-                                isSelected
-                                  ? 'bg-blue-600/20 border-blue-500 text-blue-300 font-semibold'
-                                  : 'bg-[#182030]/60 hover:bg-[#182030] border-[#24334f] text-slate-400'
-                              }`}
-                            >
-                              <div className="line-clamp-1">{tText}</div>
-                            </button>
-                          );
-                        })}
-                      </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-500">Processed:</span>
+                      <span className="text-slate-300 font-medium">{formatDateTime(short.processed_at_iso) || 'Completed'}</span>
                     </div>
-                  )}
-
-                  {/* Collapsible Description & Tags */}
-                  <div>
-                    <button
-                      onClick={() => setExpandedDescId(isExpanded ? null : short.id)}
-                      className="text-xs text-slate-400 hover:text-slate-200 flex items-center space-x-1 font-semibold"
-                    >
-                      <FileText className="w-3.5 h-3.5" />
-                      <span>{isExpanded ? 'Hide' : 'Show'} Description & Tags</span>
-                      {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                    </button>
-
-                    {isExpanded && (
-                      <div className="mt-2 p-3 bg-[#182030] rounded-xl border border-[#24334f] space-y-2 text-xs">
-                        <p className="text-slate-300 whitespace-pre-line line-clamp-4">
-                          {short.description || 'No description generated.'}
-                        </p>
-                        {short.tags && short.tags.length > 0 && (
-                          <div className="flex flex-wrap gap-1 pt-1 border-t border-[#24334f]">
-                            {short.tags.slice(0, 8).map((tg, tIdx) => (
-                              <span key={tIdx} className="text-[10px] text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded">
-                                #{tg.replace('#', '')}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
                 </div>
 
-                {/* Upload & Actions Section */}
-                <div className="pt-3 border-t border-[#1f293d]/80 space-y-3">
+                {/* Upload Button & Status Section */}
+                <div className="pt-2 border-t border-[#1f293d]/80">
                   {isUploaded ? (
-                    <div className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
-                      <div className="flex items-center space-x-2 text-xs font-bold text-emerald-400">
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>Uploaded to YouTube</span>
+                    <div className="flex items-center justify-between p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
+                      <div className="flex items-center space-x-1.5 text-xs font-bold text-emerald-400">
+                        <CheckCircle2 className="w-4 h-4 shrink-0" />
+                        <span>Uploaded</span>
                       </div>
-                      {short.youtube_url && (
+                      {(short.youtube_url || short.youtube_id) && (
                         <a
-                          href={short.youtube_url}
+                          href={short.youtube_url || `https://youtube.com/shorts/${short.youtube_id}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="flex items-center space-x-1 text-xs font-semibold text-blue-400 hover:text-blue-300"
+                          className="flex items-center space-x-1 text-xs font-semibold text-blue-400 hover:text-blue-300 ml-2"
                         >
-                          <span>Watch</span>
+                          <span>YouTube Link</span>
                           <ExternalLink className="w-3.5 h-3.5" />
                         </a>
                       )}
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <select
-                          value={currentPrivacy}
-                          onChange={(e) => handlePrivacyChange(short.id, e.target.value)}
-                          className="bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:border-red-500"
-                        >
-                          <option value="public">Public</option>
-                          <option value="unlisted">Unlisted</option>
-                          <option value="private">Private</option>
-                        </select>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={currentPrivacy}
+                        onChange={(e) => handlePrivacyChange(short.id, e.target.value)}
+                        className="bg-[#182030] text-slate-200 border border-[#24334f] rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-red-500 shrink-0"
+                      >
+                        <option value="public">Public</option>
+                        <option value="unlisted">Unlisted</option>
+                        <option value="private">Private</option>
+                      </select>
 
-                        <button
-                          onClick={() => handleUploadSingle(short)}
-                          disabled={isUploadingThis || !quota?.can_upload}
-                          className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 text-xs font-semibold text-white bg-red-600 hover:bg-red-500 disabled:opacity-50 rounded-xl transition-all shadow-sm shadow-red-500/20"
-                        >
-                          {isUploadingThis ? (
-                            <>
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              <span>Uploading...</span>
-                            </>
-                          ) : (
-                            <>
-                              <Upload className="w-3.5 h-3.5" />
-                              <span>Upload to YouTube</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
+                      <button
+                        onClick={() => handleUploadSingle(short)}
+                        disabled={isUploadingThis || (quota && quota.can_upload === false)}
+                        className="flex-1 flex items-center justify-center space-x-1 px-3 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-500 disabled:opacity-50 rounded-xl transition-all shadow-sm shadow-red-500/20"
+                      >
+                        {isUploadingThis ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Uploading...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="w-3.5 h-3.5" />
+                            <span>Upload to YouTube</span>
+                          </>
+                        )}
+                      </button>
                     </div>
                   )}
                 </div>
@@ -364,65 +302,41 @@ export default function Shorts({
         )}
       </div>
 
-      {/* Phone-Frame Modal Player */}
+      {/* Simple HTML5 Video Modal Player (Clean, Standard Controls, No Fake UI) */}
       {selectedShort && (
         <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
-          <div className="relative flex flex-col items-center">
-            {/* Close button */}
-            <button
-              onClick={() => setSelectedShort(null)}
-              className="absolute -top-12 right-0 p-2 text-slate-400 hover:text-white rounded-full bg-slate-800 transition-colors"
-            >
-              <X className="w-6 h-6" />
-            </button>
+          <div className="relative bg-[#121722] border border-[#1f293d] rounded-2xl overflow-hidden shadow-2xl flex flex-col max-w-lg w-full max-h-[90vh]">
+            {/* Modal Header */}
+            <div className="p-4 bg-[#182030] border-b border-[#24334f] flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-bold text-white line-clamp-1">
+                  {selectedShort.selected_title || selectedShort.title}
+                </h4>
+                <div className="flex items-center space-x-2 text-xs text-slate-400 mt-0.5">
+                  <span>{formatChannelName(selectedShort.channel)}</span>
+                  <span>•</span>
+                  <span>Score: {selectedShort.score}/100</span>
+                  <span>•</span>
+                  <span>{formatDuration(selectedShort.duration)}</span>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedShort(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg bg-slate-800 transition-colors ml-2"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-            {/* Smartphone Mockup Frame */}
-            <div 
-              className="relative rounded-[40px] border-[10px] border-slate-800 bg-black shadow-2xl overflow-hidden flex flex-col"
-              style={{ width: '360px', height: '640px' }}
-            >
-              {/* Notch */}
-              <div className="absolute top-2 left-1/2 -translate-x-1/2 w-32 h-4 bg-slate-800 rounded-full z-20 pointer-events-none" />
-
-              {/* Video Player */}
+            {/* Video Player */}
+            <div className="flex-1 bg-black flex items-center justify-center p-2 overflow-hidden">
               <video
                 src={`/api/shorts/${selectedShort.id}/preview`}
                 controls
                 autoPlay
-                loop
                 playsInline
-                className="w-full h-full object-cover"
+                className="max-h-[70vh] rounded-xl object-contain shadow-md"
               />
-
-              {/* Floating UI Elements (Shorts Style) */}
-              <div className="absolute right-3 bottom-20 flex flex-col items-center space-y-4 text-white z-10 pointer-events-none">
-                <div className="flex flex-col items-center">
-                  <div className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center">
-                    <ThumbsUp className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] mt-1 font-bold">{selectedShort.score * 12}</span>
-                </div>
-                <div className="flex flex-col items-center">
-                  <div className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center">
-                    <MessageSquare className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] mt-1 font-bold">142</span>
-                </div>
-                <div className="flex flex-col items-center">
-                  <div className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md flex items-center justify-center">
-                    <Share2 className="w-5 h-5" />
-                  </div>
-                  <span className="text-[10px] mt-1 font-bold">Share</span>
-                </div>
-              </div>
-
-              {/* Bottom Title Overlay */}
-              <div className="absolute bottom-4 left-4 right-16 text-white z-10 pointer-events-none">
-                <span className="text-xs font-bold text-slate-300 mb-1 block">@{formatChannelName(selectedShort.channel)}</span>
-                <p className="text-xs font-semibold line-clamp-2 drop-shadow-md">
-                  {activeTitles[selectedShort.id] || selectedShort.selected_title}
-                </p>
-              </div>
             </div>
           </div>
         </div>
@@ -443,7 +357,6 @@ export default function Shorts({
               Delete this Short? This cannot be undone.
             </p>
 
-            {/* Warning if already uploaded to YouTube */}
             {(shortToDelete.state === 'UPLOADED' || shortToDelete.youtube_url || shortToDelete.youtube_id) && (
               <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 flex items-start space-x-2.5 text-xs text-amber-200">
                 <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
@@ -455,7 +368,7 @@ export default function Shorts({
 
             <div className="bg-[#182030] p-3 rounded-xl border border-[#24334f] text-xs space-y-1">
               <div className="font-bold text-white line-clamp-1">
-                {activeTitles[shortToDelete.id] || shortToDelete.selected_title || shortToDelete.title}
+                {shortToDelete.selected_title || shortToDelete.title}
               </div>
               <div className="text-slate-400 flex items-center justify-between">
                 <span>Channel: {formatChannelName(shortToDelete.channel)}</span>

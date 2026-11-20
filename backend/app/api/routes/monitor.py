@@ -47,3 +47,30 @@ async def stop_monitoring() -> dict[str, Any]:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to stop stream monitoring: {exc}",
         ) from exc
+
+
+@router.post("/monitor/approve/{channel_id}")
+async def approve_fallback(channel_id: str) -> dict[str, Any]:
+    """Approve a discovered fallback stream and start monitoring it."""
+    try:
+        res = await supervisor.approve_fallback(channel_id)
+        return res
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to approve fallback stream: {exc}",
+        ) from exc
+
+
+@router.post("/monitor/wait-target")
+async def wait_target_channels() -> dict[str, Any]:
+    """Skip alternative streams and keep polling configured target channels."""
+    try:
+        res = await supervisor.wait_for_targets()
+        return res
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to set wait for target channels: {exc}",
+        ) from exc
+

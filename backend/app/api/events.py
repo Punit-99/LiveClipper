@@ -8,9 +8,21 @@ import logging
 import time
 from typing import Any
 
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 log = logging.getLogger("app.api.events")
+
+
+class _SuppressSocketSendFilter(logging.Filter):
+    """Filter to suppress repeated 'socket.send() raised exception.' warnings from closed sockets."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "socket.send() raised exception" not in record.getMessage()
+
+
+# Install the filter on the asyncio logger once at module import
+logging.getLogger("asyncio").addFilter(_SuppressSocketSendFilter())
 
 
 class ConnectionManager:
@@ -22,8 +34,20 @@ class ConnectionManager:
         self._loop: asyncio.AbstractEventLoop | None = None
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
-        """Capture the running event loop for thread-safe cross-thread dispatch."""
+        """Capture the running event loop for thread-safe cross-thread dispatch and suppress broken socket noise."""
         self._loop = loop
+        orig_handler = loop.get_exception_handler()
+
+        def _suppress_closed_socket_handler(lp: asyncio.AbstractEventLoop, ctx: dict[str, Any]) -> None:
+            msg = ctx.get("message", "")
+            if "socket.send() raised exception" in msg:
+                return
+            if orig_handler is not None:
+                orig_handler(lp, ctx)
+            else:
+                lp.default_exception_handler(ctx)
+
+        loop.set_exception_handler(_suppress_closed_socket_handler)
 
     async def connect(self, websocket: WebSocket) -> None:
         """Accept a new client WebSocket connection."""
@@ -56,7 +80,14 @@ class ConnectionManager:
         dead_connections: list[WebSocket] = []
         for ws in connections:
             try:
+                # Fast-check connection state: skip if already disconnected
+                if getattr(ws, "client_state", None) != WebSocketState.CONNECTED:
+                    dead_connections.append(ws)
+                    continue
                 await ws.send_text(text)
+            except (WebSocketDisconnect, ConnectionResetError, BrokenPipeError, RuntimeError, OSError) as exc:
+                log.debug("WebSocket client disconnected during send: %s", exc)
+                dead_connections.append(ws)
             except Exception as exc:
                 log.debug("Failed to send message to websocket client: %s", exc)
                 dead_connections.append(ws)

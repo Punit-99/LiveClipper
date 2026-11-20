@@ -83,6 +83,25 @@ class TestStreamRecorderCommandsAndDiscovery(unittest.TestCase):
             ["/venv/bin/streamlink", "--stdout", "https://www.twitch.tv/xqc", "best"],
         )
 
+    def test_streamlink_youtube_channel_name_and_handle_resolution(self):
+        cfg = RecordingConfig(quality="720p60,best")
+
+        # Known channel name
+        cmd_speed = build_streamlink_command("/venv/bin/streamlink", "IShowSpeed", cfg, platform="youtube")
+        self.assertIn("https://www.youtube.com/channel/UCWsDFcIhY2DBi3GB5uykGXA/live", cmd_speed)
+
+        # Handle format
+        cmd_handle = build_streamlink_command("/venv/bin/streamlink", "@CustomCreator", cfg, platform="youtube")
+        self.assertIn("https://www.youtube.com/@CustomCreator/live", cmd_handle)
+
+        # Generic name
+        cmd_gen = build_streamlink_command("/venv/bin/streamlink", "SomeGamer", cfg, platform="youtube")
+        self.assertIn("https://www.youtube.com/@SomeGamer/live", cmd_gen)
+
+        # Standalone video ID (11 chars)
+        cmd_vid = build_streamlink_command("/venv/bin/streamlink", "dQw4w9WgXcQ", cfg, platform="youtube")
+        self.assertIn("https://www.youtube.com/watch?v=dQw4w9WgXcQ", cmd_vid)
+
     def test_ffmpeg_command_builder_uses_verified_flags_and_per_session_filenames(self):
         cfg = RecordingConfig(segment_seconds=4.0)
         cmd, csv_path = build_ffmpeg_segment_command("/usr/bin/ffmpeg", Path("/tmp/buf"), 3, cfg)

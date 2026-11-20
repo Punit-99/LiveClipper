@@ -34,6 +34,35 @@ export async function stopMonitoring() {
   return res.json();
 }
 
+export async function fetchChannelsLiveStatus() {
+  const res = await fetch(`${API_BASE}/channels/live-status`);
+  if (!res.ok) throw new Error(`Failed to fetch channel live status: ${res.statusText}`);
+  return res.json();
+}
+
+export async function approveFallbackStream(channelId) {
+  const res = await fetch(`${API_BASE}/monitor/approve/${encodeURIComponent(channelId)}`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to approve fallback stream: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function waitTargetChannels() {
+  const res = await fetch(`${API_BASE}/monitor/wait-target`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to set wait for targets: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+
 export async function fetchClips(params = {}) {
   const query = new URLSearchParams();
   if (params.channel) query.set('channel', params.channel);
@@ -216,3 +245,43 @@ export function formatDuration(seconds) {
   if (m === 0) return `${remS}s`;
   return `${m}m ${remS}s`;
 }
+
+export function formatDateTime(isoString) {
+  if (!isoString) return '';
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).replace(',', ' at');
+  } catch (e) {
+    return '';
+  }
+}
+
+export function formatRelativeTime(isoString) {
+  if (!isoString) return '';
+  try {
+    const d = new Date(isoString);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    if (isNaN(diffMs)) return '';
+    const diffSec = Math.floor(diffMs / 1000);
+    if (diffSec < 60) return 'just now';
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHours = Math.floor(diffMin / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  } catch (e) {
+    return '';
+  }
+}
+

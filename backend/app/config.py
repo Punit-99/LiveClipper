@@ -91,6 +91,7 @@ class Settings:
     liveness_poll_seconds: float = 60.0
     target_channels: tuple[str, ...] = ()
     multi_stream_enabled: bool = False
+    auto_approve_fallback: bool = False
     # --- Stage 7: Shorts processing & YouTube upload (optional) ---
     shorts_output_dir: Path = _BACKEND_DIR / "shorts"
     shorts_engine: str = "auto"
@@ -280,12 +281,13 @@ def load_settings() -> Settings:
         clip_max_duration_seconds=_float_env("CLIP_MAX_DURATION_SECONDS", 90.0),
         clip_reencode=_bool_env("CLIP_REENCODE", True),
         clips_output_dir=_path_env("CLIPS_OUTPUT_DIR", "clips"),
-        max_concurrent_streams=_int_env("MAX_CONCURRENT_STREAMS", 3),
+        max_concurrent_streams=_int_env("MAX_CONCURRENT_STREAMS", _int_env("MAX_STREAMS", 2)),
         max_total_buffer_mb=_float_env("MAX_TOTAL_BUFFER_MB", 1500.0),
         max_concurrent_extractions=_int_env("MAX_CONCURRENT_EXTRACTIONS", 2),
         liveness_poll_seconds=_float_env("LIVENESS_POLL_SECONDS", 60.0),
         target_channels=_tuple_env("TARGET_CHANNELS"),
         multi_stream_enabled=_bool_env("MULTI_STREAM_ENABLED", False),
+        auto_approve_fallback=_bool_env("AUTO_APPROVE_FALLBACK", False),
         shorts_output_dir=_path_env("SHORTS_OUTPUT_DIR", "shorts"),
         shorts_engine=os.getenv("SHORTS_ENGINE", "auto").strip().lower() or "auto",
         shorts_max_duration=_float_env("SHORTS_MAX_DURATION", 59.0),

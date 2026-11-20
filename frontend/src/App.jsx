@@ -11,20 +11,22 @@ import {
   fetchClips, 
   fetchShorts, 
   fetchHighlights, 
-  fetchSettings,
+  fetchSettings, 
   startMonitoring, 
   stopMonitoring, 
   processPendingShorts, 
-  processSingleShort,
+  processSingleShort, 
   uploadSingleShort, 
   autoUploadShorts, 
   updateSettings,
   deleteSingleClip,
   deleteAllClips,
   deleteSingleShort,
-  deleteAllShorts 
+  deleteAllShorts,
+  approveFallbackStream,
+  waitTargetChannels
 } from './api';
-import { AlertCircle, CheckCircle2, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -41,14 +43,22 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [toast, setToast] = useState(null);
+  const [toasts, setToasts] = useState([]);
   const [clipProcessingStatus, setClipProcessingStatus] = useState(null);
 
   const wsRef = useRef(null);
 
-  const showToast = (message, type = 'info') => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
+  // Auto-dismissing top-right toast notification manager
+  const showToast = useCallback((message, type = 'info', action = null) => {
+    const id = Date.now() + Math.random().toString();
+    setToasts(prev => [...prev.slice(-3), { id, message, type, action }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4500);
+  }, []);
+
+  const dismissToast = (id) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
   };
 
   const loadAllData = useCallback(async () => {
@@ -93,12 +103,54 @@ export default function App() {
           // Add to live events timeline
           setLiveEvents(prev => [payload, ...prev].slice(0, 100));
 
-          // Trigger state refreshes based on event types
+          // Trigger state updates and notifications based on event types (Requirement 10)
           if (payload.type === 'status_update' || payload.type === 'monitoring_started' || payload.type === 'monitoring_stopped') {
             loadAllData();
+            if (payload.type === 'monitoring_started') {
+              showToast('Stream monitoring started!', 'info');
+            } else if (payload.type === 'monitoring_stopped') {
+              showToast('Stream monitoring stopped.', 'info');
+            }
+          } else if (payload.type === 'recording_started') {
+            loadAllData();
+            showToast(payload.data?.message || `Started recording ${payload.data?.channel}`, 'info');
+          } else if (payload.type === 'chat_spike_detected') {
+            showToast(payload.data?.message || `Chat spike detected on ${payload.data?.channel}!`, 'info');
+          } else if (payload.type === 'gemini_analyzing') {
+            showToast(payload.data?.message || `Gemini analyzing highlight on ${payload.data?.channel}...`, 'info');
+          } else if (payload.type === 'gemini_verdict') {
+            const isApproved = Boolean(payload.data?.approved);
+            showToast(payload.data?.message || `Gemini verdict: ${payload.data?.score}/100`, isApproved ? 'success' : 'info');
+          } else if (payload.type === 'clip_extracting') {
+            showToast(payload.data?.message || `Extracting clip for ${payload.data?.channel}...`, 'info');
           } else if (payload.type === 'clip_extracted') {
             fetchClips().then(setClips).catch(() => {});
-            showToast(`New clip extracted: ${payload.data?.title || payload.data?.filename}`, 'success');
+            showToast(
+              payload.data?.message || `New clip extracted: ${payload.data?.title || payload.data?.filename}`, 
+              'success', 
+              { label: 'View', onClick: () => setActiveTab('clips') }
+            );
+          } else if (payload.type === 'clip_extraction_failed') {
+            showToast(payload.data?.message || `Clip extraction failed: ${payload.data?.error}`, 'error');
+          } else if (payload.type === 'stream_offline') {
+            loadAllData();
+            showToast(payload.data?.message || `Stream ${payload.data?.channel} went offline.`, 'info');
+          } else if (payload.type === 'recording_stopped') {
+            loadAllData();
+            showToast(payload.data?.message || `Recording stopped for ${payload.data?.channel}.`, 'info');
+          } else if (payload.type === 'fallback_streams_discovered') {
+            loadAllData();
+          } else if (payload.type === 'fallback_stream_approved') {
+            showToast(`Fallback stream ${payload.data?.channel} approved! Starting recording...`, 'success');
+            loadAllData();
+          } else if (payload.type === 'waiting_target_channels') {
+            showToast(payload.data?.message || 'Waiting for target channels to come online...', 'info');
+            loadAllData();
+          } else if (payload.type === 'target_channel_online') {
+            showToast(`Target channel ${payload.data?.channel} is now LIVE! Starting recording...`, 'success');
+            loadAllData();
+          } else if (payload.type === 'stats_update') {
+            setStatus(prev => prev ? ({ ...prev, live_stats: payload.data }) : prev);
           } else if (payload.type === 'processing_started' || payload.type === 'short_processing_started') {
             setClipProcessingStatus({
               active: true,
@@ -171,7 +223,7 @@ export default function App() {
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (wsRef.current) wsRef.current.close();
     };
-  }, [loadAllData]);
+  }, [loadAllData, showToast]);
 
   // Actions
   const handleToggleMonitoring = async () => {
@@ -185,8 +237,14 @@ export default function App() {
   const handleStartMonitoring = async (payload) => {
     setIsStarting(true);
     try {
-      await startMonitoring(payload);
-      showToast('Live stream monitoring started!', 'success');
+      const res = await startMonitoring(payload);
+      if (res.status === 'awaiting_fallback_approval') {
+        showToast('Target channels offline. Alternative streams found.', 'info');
+      } else if (res.status === 'waiting_for_targets') {
+        showToast('Target channels offline. Polling targets in background.', 'info');
+      } else {
+        showToast('Live stream monitoring started!', 'success');
+      }
       await loadAllData();
     } catch (err) {
       showToast(`Could not start monitoring: ${err.message}`, 'error');
@@ -202,6 +260,26 @@ export default function App() {
       await loadAllData();
     } catch (err) {
       showToast(`Could not stop monitoring: ${err.message}`, 'error');
+    }
+  };
+
+  const handleApproveFallback = async (channelId) => {
+    try {
+      await approveFallbackStream(channelId);
+      showToast('Fallback stream approved! Starting recording...', 'success');
+      await loadAllData();
+    } catch (err) {
+      showToast(`Failed to approve stream: ${err.message}`, 'error');
+    }
+  };
+
+  const handleWaitTarget = async () => {
+    try {
+      await waitTargetChannels();
+      showToast('Waiting for target channels to come online.', 'info');
+      await loadAllData();
+    } catch (err) {
+      showToast(`Failed: ${err.message}`, 'error');
     }
   };
 
@@ -301,24 +379,52 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0a0d14] flex flex-col">
-      {/* Toast Notification */}
-      {toast && (
-        <div className="fixed bottom-6 right-6 z-50 animate-bounce">
-          <div className={`flex items-center space-x-3 px-4 py-3 rounded-xl shadow-2xl border text-sm font-semibold ${
-            toast.type === 'error'
-              ? 'bg-red-950/90 border-red-500/50 text-red-200'
-              : toast.type === 'success'
-              ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-200'
-              : 'bg-blue-950/90 border-blue-500/50 text-blue-200'
-          }`}>
-            {toast.type === 'error' ? <AlertCircle className="w-5 h-5 text-red-400" /> : <CheckCircle2 className="w-5 h-5 text-emerald-400" />}
-            <span>{toast.message}</span>
-            <button onClick={() => setToast(null)} className="ml-2 hover:opacity-80">
-              <X className="w-4 h-4" />
-            </button>
+      {/* Top-Right Auto-Dismissing Toast Notifications (Requirement 10) */}
+      <div className="fixed top-6 right-6 z-50 flex flex-col space-y-2.5 pointer-events-none max-w-sm w-full">
+        {toasts.map((t) => (
+          <div
+            key={t.id}
+            className={`pointer-events-auto flex items-center justify-between space-x-3 px-4 py-3 rounded-xl shadow-2xl border text-xs font-semibold animate-in slide-in-from-top-2 duration-200 ${
+              t.type === 'error'
+                ? 'bg-red-950/95 border-red-500/50 text-red-200'
+                : t.type === 'success'
+                ? 'bg-emerald-950/95 border-emerald-500/50 text-emerald-200'
+                : 'bg-[#182030]/95 border-[#24334f] text-slate-200'
+            }`}
+          >
+            <div className="flex items-center space-x-2.5 min-w-0">
+              {t.type === 'error' ? (
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+              ) : t.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : (
+                <Info className="w-4 h-4 text-blue-400 shrink-0" />
+              )}
+              <span className="truncate">{t.message}</span>
+            </div>
+
+            <div className="flex items-center space-x-2 shrink-0">
+              {t.action && (
+                <button
+                  onClick={() => {
+                    t.action.onClick();
+                    dismissToast(t.id);
+                  }}
+                  className="px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold transition-colors"
+                >
+                  {t.action.label}
+                </button>
+              )}
+              <button
+                onClick={() => dismissToast(t.id)}
+                className="p-1 hover:opacity-75 rounded transition-opacity"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        ))}
+      </div>
 
       {/* Top Navbar */}
       <Navbar
@@ -336,11 +442,14 @@ export default function App() {
           <Dashboard
             status={status}
             quota={quota}
+            settings={settings}
             highlights={highlights}
             clips={clips}
             shorts={shorts}
             onStartMonitoring={handleStartMonitoring}
             onStopMonitoring={handleStopMonitoring}
+            onApproveFallback={handleApproveFallback}
+            onWaitTarget={handleWaitTarget}
             onNavigate={setActiveTab}
             onRefresh={loadAllData}
           />

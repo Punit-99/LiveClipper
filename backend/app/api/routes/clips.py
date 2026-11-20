@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
@@ -104,6 +105,13 @@ def list_clips(
             and Path(manifest_entry["short_video_path"]).is_file()
         )
 
+        rec_time_iso = sidecar_data.get("recorded_at_iso") or sidecar_data.get("extracted_at_iso")
+        if not rec_time_iso and src_path.is_file():
+            try:
+                rec_time_iso = datetime.fromtimestamp(src_path.stat().st_mtime, tz=timezone.utc).isoformat()
+            except Exception:
+                rec_time_iso = ""
+
         output.append({
             "id": cid,
             "filename": src_path.name,
@@ -116,14 +124,15 @@ def list_clips(
             "duration": round(duration, 1),
             "reasoning": analysis.get("reasoning") or "",
             "quotes": analysis.get("key_quotes") or [],
-            "extracted_at": sidecar_data.get("extracted_at_iso") or "",
+            "extracted_at": sidecar_data.get("extracted_at_iso") or rec_time_iso or "",
+            "recorded_at_iso": rec_time_iso or sidecar_data.get("extracted_at_iso") or "",
             "has_short": has_short,
             "short_state": manifest_entry.get("state") if manifest_entry else "DISCOVERED",
             "short_path": manifest_entry.get("short_video_path") if manifest_entry else None,
         })
 
-    # Sort newest / highest score first
-    output.sort(key=lambda x: (x["score"], x["extracted_at"]), reverse=True)
+    # Sort newest recorded first
+    output.sort(key=lambda x: (x.get("recorded_at_iso") or x.get("extracted_at") or "", x.get("score", 0)), reverse=True)
     return output
 
 

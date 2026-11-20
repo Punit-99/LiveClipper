@@ -119,6 +119,34 @@ def find_ffmpeg_binary() -> str:
     )
 
 
+def _resolve_youtube_stream_url(clean_channel: str, video_id: str | None = None) -> str:
+    """Resolve YouTube channel identifier, handle, or video ID to a Streamlink-compatible URL."""
+    if video_id:
+        return f"https://www.youtube.com/watch?v={video_id}"
+    if clean_channel.startswith(("http://", "https://")):
+        return clean_channel
+    if clean_channel.startswith("UC"):
+        return f"https://www.youtube.com/channel/{clean_channel}/live"
+    if clean_channel.startswith("@"):
+        return f"https://www.youtube.com/{clean_channel}/live"
+
+    # Try mapping human-readable channel name to known channel ID
+    try:
+        from app.discovery.youtube_finder import KNOWN_CHANNEL_NAMES
+        for cid, name in KNOWN_CHANNEL_NAMES.items():
+            if name.lower() == clean_channel.lower():
+                return f"https://www.youtube.com/channel/{cid}/live"
+    except ImportError:
+        pass
+
+    # Check if channel looks like a standalone 11-char video ID (e.g. dQw4w9WgXcQ)
+    if len(clean_channel) == 11 and not any(c in clean_channel for c in " /@:."):
+        return f"https://www.youtube.com/watch?v={clean_channel}"
+
+    # Default to channel handle URL (e.g. https://www.youtube.com/@IShowSpeed/live)
+    return f"https://www.youtube.com/@{clean_channel.lstrip('@')}/live"
+
+
 def build_streamlink_command(
     streamlink_bin: str,
     channel: str,
@@ -137,14 +165,7 @@ def build_streamlink_command(
 
     cmd = [streamlink_bin]
     if platform == "youtube" or video_id or clean_channel.startswith(("http://", "https://")):
-        if video_id:
-            stream_url = f"https://www.youtube.com/watch?v={video_id}"
-        elif clean_channel.startswith("http"):
-            stream_url = clean_channel
-        elif clean_channel.startswith("UC"):
-            stream_url = f"https://www.youtube.com/channel/{clean_channel}/live"
-        else:
-            stream_url = f"https://www.youtube.com/watch?v={clean_channel}"
+        stream_url = _resolve_youtube_stream_url(clean_channel, video_id)
         cmd.extend(["--stdout", stream_url, config.quality])
     else:
         if config.low_latency:
@@ -315,6 +336,7 @@ class StreamRecorder:
         self._streamlink_bin = streamlink_bin
         self._ffmpeg_bin = ffmpeg_bin
         self._pipeline_factory = pipeline_factory or _default_spawn_pipeline
+        self._last_streamlink_error: str | None = None
 
         self._wall_clock = wall_clock
         self._mono_clock = mono_clock
@@ -538,26 +560,42 @@ class StreamRecorder:
                     if self._stop_requested:
                         break
 
-                # Detect child exits.
-                if procs.ffmpeg.returncode is not None:
-                    log.warning(
-                        "FFmpeg exited in session %d (rc=%s).",
-                        session_id,
-                        procs.ffmpeg.returncode,
-                    )
-                    break
+                # Detect child exits. Check Streamlink first because if Streamlink exits,
+                # FFmpeg will immediately see EOF on pipe:0 and exit with rc=183 (AVERROR_INVALIDDATA).
                 if procs.streamlink.returncode is not None:
-                    log.warning(
-                        "Streamlink exited in session %d (rc=%s); waiting briefly for FFmpeg flush.",
-                        session_id,
-                        procs.streamlink.returncode,
-                    )
+                    if session_segments == 0 and procs.streamlink.returncode != 0:
+                        err_detail = getattr(self, "_last_streamlink_error", None) or f"rc={procs.streamlink.returncode}"
+                        log.warning(
+                            "Streamlink exited before stream began in session %d (%s).",
+                            session_id,
+                            err_detail,
+                        )
+                    else:
+                        log.warning(
+                            "Streamlink exited in session %d (rc=%s); waiting briefly for FFmpeg flush.",
+                            session_id,
+                            procs.streamlink.returncode,
+                        )
                     # Give FFmpeg a brief moment to finish writing its final segment.
                     await self._wait_for_ffmpeg_flush(procs.ffmpeg, timeout=self._shutdown_grace)
                     newly_registered, seen_rows = self._ingest_csv_updates(
                         csv_path, session_id, seen_rows
                     )
                     session_segments += newly_registered
+                    break
+
+                if procs.ffmpeg.returncode is not None:
+                    if procs.ffmpeg.returncode == 183 and session_segments == 0:
+                        log.warning(
+                            "FFmpeg exited in session %d (rc=183: empty/invalid stream input from pipe:0).",
+                            session_id,
+                        )
+                    else:
+                        log.warning(
+                            "FFmpeg exited in session %d (rc=%s).",
+                            session_id,
+                            procs.ffmpeg.returncode,
+                        )
                     break
 
                 # Stall detection using monotonic clock.
@@ -742,6 +780,8 @@ class StreamRecorder:
                     break
                 text = raw.decode("utf-8", errors="replace").strip()
                 if text:
+                    if "streamlink" in label and ("error" in text.lower() or "warning" in text.lower()):
+                        self._last_streamlink_error = text
                     log.debug("%s | %s", label, text)
         except asyncio.CancelledError:
             raise

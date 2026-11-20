@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
@@ -109,6 +110,32 @@ def list_shorts(
         youtube_url = rec.get("youtube_url") or upload_info.get("youtube_url")
         youtube_id = rec.get("youtube_id") or upload_info.get("video_id")
 
+        # Resolve recorded_at_iso and processed_at_iso
+        orig_recorded_iso = ""
+        source_sc_str = rec.get("source_sidecar_path")
+        if source_sc_str and Path(source_sc_str).is_file():
+            try:
+                with open(source_sc_str, "r", encoding="utf-8") as sfh:
+                    orig_sc = json.load(sfh)
+                    orig_recorded_iso = orig_sc.get("recorded_at_iso") or orig_sc.get("extracted_at_iso") or ""
+            except Exception:
+                pass
+
+        if not orig_recorded_iso:
+            src_clip_str = rec.get("source_clip_path")
+            if src_clip_str and Path(src_clip_str).is_file():
+                try:
+                    orig_recorded_iso = datetime.fromtimestamp(Path(src_clip_str).stat().st_mtime, tz=timezone.utc).isoformat()
+                except Exception:
+                    pass
+
+        processed_iso = rec.get("updated_at_iso") or ""
+        if not processed_iso and short_video_path.is_file():
+            try:
+                processed_iso = datetime.fromtimestamp(short_video_path.stat().st_mtime, tz=timezone.utc).isoformat()
+            except Exception:
+                pass
+
         output.append({
             "id": cid,
             "filename": short_video_path.name,
@@ -128,9 +155,11 @@ def list_shorts(
             "youtube_url": youtube_url,
             "youtube_id": youtube_id,
             "updated_at": rec.get("updated_at_iso") or "",
+            "recorded_at_iso": orig_recorded_iso or rec.get("updated_at_iso") or "",
+            "processed_at_iso": processed_iso or rec.get("updated_at_iso") or "",
         })
 
-    output.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+    output.sort(key=lambda x: x.get("processed_at_iso") or x.get("updated_at", ""), reverse=True)
     return output
 
 

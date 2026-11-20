@@ -367,3 +367,104 @@ class TestDashboardAPI(TestCase):
         stages = [p["stage"] for p in progress_events]
         self.assertEqual(stages, ["trimming", "reframing", "transcribing", "subtitles", "hooks", "encoding"])
         self.assertEqual(progress_events[-1]["percentage"], 100)
+
+    def test_websocket_broadcast_cleans_up_disconnected_clients(self) -> None:
+        """Broadcast gracefully handles and removes disconnected/errored WebSocket clients."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+        from starlette.websockets import WebSocketState
+        from app.api.events import ConnectionManager
+
+        mgr = ConnectionManager()
+        # Mock a disconnected websocket
+        disconnected_ws = MagicMock()
+        disconnected_ws.client_state = WebSocketState.DISCONNECTED
+        disconnected_ws.send_text = AsyncMock()
+
+        # Mock an errored websocket that raises ConnectionResetError
+        errored_ws = MagicMock()
+        errored_ws.client_state = WebSocketState.CONNECTED
+        errored_ws.send_text = AsyncMock(side_effect=ConnectionResetError("Socket broken"))
+
+        # Mock a healthy websocket
+        healthy_ws = MagicMock()
+        healthy_ws.client_state = WebSocketState.CONNECTED
+        healthy_ws.send_text = AsyncMock()
+
+        mgr.active_connections = {disconnected_ws, errored_ws, healthy_ws}
+
+        # Run broadcast
+        asyncio.run(mgr.broadcast("ping_event", {"hello": "world"}))
+
+        # Healthy client should receive message
+        healthy_ws.send_text.assert_awaited_once()
+        # Disconnected client should not have send_text called
+        disconnected_ws.send_text.assert_not_awaited()
+        # Dead clients should be removed from active_connections
+        self.assertNotIn(disconnected_ws, mgr.active_connections)
+        self.assertNotIn(errored_ws, mgr.active_connections)
+        self.assertIn(healthy_ws, mgr.active_connections)
+
+    def test_channels_live_status_endpoint(self) -> None:
+        """GET /api/channels/live-status returns live/offline status for configured channels."""
+        with patch(
+            "app.api.routes.channels.check_youtube_channel_live_status",
+            return_value={
+                "id": "UCWsDFcIhY2DBi3GB5uykGXA",
+                "name": "IShowSpeed",
+                "platform": "youtube",
+                "is_live": True,
+                "viewers": 45000,
+                "title": "Playing GTA 6 Live!",
+                "category": "Gaming",
+                "language": "en",
+                "video_id": "vid123",
+            },
+        ):
+            resp = self.client.get("/api/channels/live-status")
+            self.assertEqual(resp.status_code, 200)
+            data = resp.json()
+            self.assertIn("channels", data)
+            self.assertIsInstance(data["channels"], list)
+            ch = next((c for c in data["channels"] if c["id"] == "UCWsDFcIhY2DBi3GB5uykGXA"), None)
+            self.assertIsNotNone(ch)
+            self.assertTrue(ch["is_live"])
+            self.assertEqual(ch["viewers"], 45000)
+            self.assertEqual(ch["platform"], "youtube")
+
+    def test_monitor_fallback_approval_and_wait_endpoints(self) -> None:
+        """POST /api/monitor/approve/{channel_id} and POST /api/monitor/wait-target work correctly."""
+        from unittest.mock import AsyncMock
+
+        with patch("app.api.routes.monitor.supervisor.approve_fallback", new_callable=AsyncMock) as mock_approve:
+            mock_approve.return_value = {"status": "started", "channel": "test_streamer", "is_fallback": True}
+            resp = self.client.post("/api/monitor/approve/test_streamer")
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.json()["status"], "started")
+            mock_approve.assert_awaited_once_with("test_streamer")
+
+        with patch("app.api.routes.monitor.supervisor.wait_for_targets", new_callable=AsyncMock) as mock_wait:
+            mock_wait.return_value = {"status": "waiting_for_targets", "message": "Polling targets"}
+            resp = self.client.post("/api/monitor/wait-target")
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.json()["status"], "waiting_for_targets")
+            mock_wait.assert_awaited_once()
+
+    def test_clips_recorded_date_included(self) -> None:
+        """GET /api/clips returns recorded_at_iso date field for all clips."""
+        resp = self.client.get("/api/clips")
+        self.assertEqual(resp.status_code, 200)
+        clips = resp.json()
+        if clips:
+            self.assertIn("recorded_at_iso", clips[0])
+            self.assertIn("duration", clips[0])
+
+    def test_shorts_recorded_and_processed_dates_included(self) -> None:
+        """GET /api/shorts returns recorded_at_iso and processed_at_iso fields."""
+        resp = self.client.get("/api/shorts")
+        self.assertEqual(resp.status_code, 200)
+        shorts = resp.json()
+        if shorts:
+            self.assertIn("recorded_at_iso", shorts[0])
+            self.assertIn("processed_at_iso", shorts[0])
+
