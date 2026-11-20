@@ -71,7 +71,15 @@ export async function fetchClips(params = {}) {
 
   const res = await fetch(`${API_BASE}/clips?${query.toString()}`);
   if (!res.ok) throw new Error(`Clips fetch failed: ${res.statusText}`);
-  return res.json();
+  const data = await res.json();
+  const list = Array.isArray(data) ? data : (data?.clips || []);
+  return list.map(item => ({
+    ...item,
+    clip_id: item.clip_id || item.id,
+    id: item.id || item.clip_id,
+    highlight_score: item.highlight_score ?? item.score ?? 0,
+    score: item.score ?? item.highlight_score ?? 0,
+  }));
 }
 
 export async function fetchShorts(params = {}) {
@@ -81,7 +89,15 @@ export async function fetchShorts(params = {}) {
 
   const res = await fetch(`${API_BASE}/shorts?${query.toString()}`);
   if (!res.ok) throw new Error(`Shorts fetch failed: ${res.statusText}`);
-  return res.json();
+  const data = await res.json();
+  const list = Array.isArray(data) ? data : (data?.shorts || []);
+  return list.map(item => ({
+    ...item,
+    clip_id: item.clip_id || item.id,
+    id: item.id || item.clip_id,
+    highlight_score: item.highlight_score ?? item.score ?? 0,
+    score: item.score ?? item.highlight_score ?? 0,
+  }));
 }
 
 export async function processPendingShorts(payload = {}) {
@@ -421,5 +437,122 @@ export async function processImportedClip(clipId) {
   }
   return res.json();
 }
+
+export async function downloadImportVideo(payload) {
+  const res = await fetch(`${API_BASE}/import/download`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Download failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export function uploadImportVideoFile(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const formData = new FormData();
+    formData.append('file', file);
+
+    xhr.open('POST', `${API_BASE}/import/upload`);
+
+    if (xhr.upload && onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const pct = Math.round((event.loaded / event.total) * 100);
+          onProgress(pct, event.loaded, event.total);
+        }
+      };
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          resolve(data);
+        } catch {
+          resolve({});
+        }
+      } else {
+        try {
+          const err = JSON.parse(xhr.responseText);
+          reject(new Error(err.detail || `Upload failed with status ${xhr.status}`));
+        } catch {
+          reject(new Error(`Upload failed with status ${xhr.status}`));
+        }
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('Network error during file upload'));
+    xhr.send(formData);
+  });
+}
+
+export async function fetchImportLibrary() {
+  const res = await fetch(`${API_BASE}/import/library`);
+  if (!res.ok) throw new Error(`Failed to fetch library: ${res.statusText}`);
+  return res.json();
+}
+
+export async function deleteImportLibraryVideo(videoId) {
+  const res = await fetch(`${API_BASE}/import/library/${videoId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to delete library video: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function startLibraryAnalysis(videoId, payload) {
+  const res = await fetch(`${API_BASE}/import/analyze/${videoId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Analysis failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function cancelImportJob(jobId) {
+  const res = await fetch(`${API_BASE}/import/jobs/${jobId}/cancel`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to cancel job: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function clearAllImportData() {
+  const res = await fetch(`${API_BASE}/import/clips?confirm=true`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to clear imports: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function resetQuotaCounter() {
+  const res = await fetch(`${API_BASE}/upload/quota/reset`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Failed to reset quota counter: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 
 

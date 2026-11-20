@@ -10,7 +10,10 @@ export function StreamStatus({
   isMonitoring,
   onCheckLiveStatus,
   isCheckingLive,
+  onOpenStartModal,
 }) {
+  const safeChannels = Array.isArray(channels) ? channels : []
+
   return (
     <Card className="border-[#1f293d] bg-[#121826]/80">
       <CardHeader className="flex flex-row items-center justify-between pb-3">
@@ -18,29 +21,41 @@ export function StreamStatus({
           <Radio className="w-4 h-4 text-emerald-400" />
           <CardTitle className="text-base text-white">Target Channels</CardTitle>
           <Badge variant="outline" className="text-xs">
-            {channels.length} Configured
+            {safeChannels.length} Configured
           </Badge>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onCheckLiveStatus}
-          disabled={isCheckingLive}
-          className="h-8 text-xs border-[#1f293d] hover:bg-[#1a2233] space-x-1.5"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isCheckingLive ? "animate-spin" : ""}`} />
-          <span>Check Live Status</span>
-        </Button>
+        <div className="flex items-center space-x-2">
+          {!isMonitoring && onOpenStartModal && (
+            <Button
+              size="sm"
+              onClick={onOpenStartModal}
+              className="h-8 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-semibold space-x-1.5"
+            >
+              <Radio className="w-3.5 h-3.5" />
+              <span>Start Monitoring</span>
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onCheckLiveStatus}
+            disabled={isCheckingLive}
+            className="h-8 text-xs border-[#1f293d] hover:bg-[#1a2233] space-x-1.5"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isCheckingLive ? "animate-spin" : ""}`} />
+            <span>Check Live Status</span>
+          </Button>
+        </div>
       </CardHeader>
 
       <CardContent>
-        {channels.length === 0 ? (
+        {safeChannels.length === 0 ? (
           <div className="py-8 text-center text-xs text-slate-500">
             No target channels configured in Settings.
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {channels.map((ch) => {
+            {safeChannels.map((ch) => {
               const name = ch.display_name || ch.name || ch.channel_id || "Channel"
               const isLive = Boolean(ch.is_live || ch.live)
               const viewers = ch.viewer_count || ch.viewers || 0

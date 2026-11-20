@@ -48,6 +48,24 @@ def get_upload_quota() -> dict[str, Any]:
     }
 
 
+@router.post("/upload/quota/reset")
+def reset_upload_quota() -> dict[str, Any]:
+    """Reset the daily YouTube quota tracker counter to zero."""
+    settings = load_settings()
+    tracker = get_quota_tracker(settings=settings)
+    tracker.reset_counter()
+    quota_status = tracker.get_status()
+    can_upload, reason = tracker.can_upload()
+    ws_manager.broadcast_sync("quota_updated", quota_status)
+    return {
+        **quota_status,
+        "can_upload": can_upload,
+        "reason": reason,
+        "is_configured": bool(settings.youtube_client_id and settings.youtube_client_secret),
+        "message": "YouTube upload quota counter has been reset.",
+    }
+
+
 @router.post("/upload/verify-all")
 def verify_all_uploads() -> dict[str, Any]:
     """Batch verify all uploaded Shorts against the YouTube Data API."""

@@ -17,6 +17,7 @@ services:
       - ./backend/.env:/app/.env
       - ./backend/clips:/app/clips
       - ./backend/shorts:/app/shorts
+      - ./backend/imports:/app/imports
       - ./backend/.buffer:/app/.buffer
       - ./backend/highlights.jsonl:/app/highlights.jsonl
       - ./backend/.youtube_tokens.json:/app/.youtube_tokens.json

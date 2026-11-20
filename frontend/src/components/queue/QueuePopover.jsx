@@ -102,27 +102,27 @@ export function QueuePopover({ queueStatus, open, onOpenChange }) {
 
         <ScrollArea className="max-h-[360px] pr-2 space-y-3">
           {/* Processing Queue */}
-          {processing.items?.length > 0 && (
+          {(processing.items || []).length > 0 && (
             <div className="space-y-2 mb-3">
               <div className="flex items-center justify-between text-xs font-semibold text-slate-400">
                 <span>Shorts Processing</span>
                 <span>{processing.items.length} active/queued</span>
               </div>
               <div className="space-y-2">
-                {processing.items.map((item) => renderTaskItem(item, "processing"))}
+                {(processing.items || []).map((item) => renderTaskItem(item, "processing"))}
               </div>
             </div>
           )}
 
           {/* Upload Queue */}
-          {upload.items?.length > 0 && (
+          {(upload.items || []).length > 0 && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs font-semibold text-slate-400">
                 <span>YouTube Uploads</span>
                 <span>{upload.items.length} active/queued</span>
               </div>
               <div className="space-y-2">
-                {upload.items.map((item) => renderTaskItem(item, "upload"))}
+                {(upload.items || []).map((item) => renderTaskItem(item, "upload"))}
               </div>
             </div>
           )}

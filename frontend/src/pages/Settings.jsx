@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useRef } from "react"
 import {
   Save,
   Lock,
@@ -25,7 +25,7 @@ import { Slider } from "@/components/ui/slider"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Badge } from "@/components/ui/badge"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
-import { resolveChannel } from "@/api"
+import { resolveChannel, resetQuotaCounter } from "@/api"
 import { toast } from "sonner"
 
 const AVAILABLE_LANGUAGES = [
@@ -64,18 +64,40 @@ export default function SettingsPage({ settings = {}, onSave, isSaving }) {
   // Dynamic YouTube Channels rows: [{ id: 'UC...', name: 'CarryMinati', active: true }]
   const [ytChannels, setYtChannels] = useState([])
   const [selectedLanguages, setSelectedLanguages] = useState(["en", "hi"])
+  const [isResettingQuota, setIsResettingQuota] = useState(false)
+  const resolvedRef = useRef(new Set())
+
+  const handleResetQuota = async () => {
+    setIsResettingQuota(true)
+    try {
+      await resetQuotaCounter()
+      toast.success("YouTube quota counter reset to 0.")
+    } catch (err) {
+      toast.error(`Failed to reset quota: ${err.message || "Unknown error"}`)
+    } finally {
+      setIsResettingQuota(false)
+    }
+  }
 
   useEffect(() => {
     if (settings && Object.keys(settings).length > 0) {
       setFormData((prev) => ({
         ...prev,
         ...settings,
+        openshorts_subtitle_style: settings.openshorts_subtitle_style || settings.subtitle_style || prev.openshorts_subtitle_style || "bold",
+        openshorts_reframe_mode: settings.openshorts_reframe_mode || settings.reframe_mode || prev.openshorts_reframe_mode || "split",
         gemini_api_key: "",
       }))
 
-      // Parse YouTube channels
-      const activeList = settings.target_youtube_channels || []
-      const excludedList = settings.excluded_youtube_channels || []
+      // Parse YouTube channels defensively (string or array)
+      const parseList = (val) => {
+        if (Array.isArray(val)) return val.map((s) => String(s || "").trim()).filter(Boolean)
+        if (typeof val === "string") return val.split(",").map((s) => s.trim()).filter(Boolean)
+        return []
+      }
+
+      const activeList = parseList(settings.target_youtube_channels)
+      const excludedList = parseList(settings.excluded_youtube_channels)
       const combined = [
         ...activeList.map((id) => ({ id, name: id, active: true })),
         ...excludedList.map((id) => ({ id, name: id, active: false })),
@@ -83,58 +105,66 @@ export default function SettingsPage({ settings = {}, onSave, isSaving }) {
       setYtChannels(combined.length > 0 ? combined : [{ id: "", name: "", active: true }])
 
       if (settings.target_languages) {
-        setSelectedLanguages(Array.from(settings.target_languages))
+        const langs = parseList(settings.target_languages)
+        if (langs.length > 0) {
+          setSelectedLanguages(langs)
+        }
       }
     }
   }, [settings])
 
   // Resolve channel names asynchronously
   useEffect(() => {
-    ytChannels.forEach((item, idx) => {
-      if (item.id && item.id.startsWith("UC") && item.name === item.id) {
-        resolveChannel(item.id).then((res) => {
-          if (res && res.name && res.name !== item.id) {
-            setYtChannels((prev) =>
-              prev.map((c, i) => (i === idx ? { ...c, name: res.name } : c))
-            )
-          }
-        })
+    (ytChannels || []).forEach((item, idx) => {
+      if (item && item.id && item.id.startsWith("UC") && item.name === item.id && !resolvedRef.current.has(item.id)) {
+        resolvedRef.current.add(item.id)
+        resolveChannel(item.id)
+          .then((res) => {
+            if (res && res.name && res.name !== item.id) {
+              setYtChannels((prev) =>
+                (prev || []).map((c, i) => (i === idx ? { ...c, name: res.name } : c))
+              )
+            }
+          })
+          .catch(() => {})
       }
     })
   }, [ytChannels])
 
   const handleAddChannel = () => {
-    setYtChannels((prev) => [...prev, { id: "", name: "", active: true }])
+    setYtChannels((prev) => [...(prev || []), { id: "", name: "", active: true }])
   }
 
   const handleRemoveChannel = (index) => {
-    setYtChannels((prev) => prev.filter((_, idx) => idx !== index))
+    setYtChannels((prev) => (prev || []).filter((_, idx) => idx !== index))
   }
 
   const handleChannelIdChange = (index, val) => {
     setYtChannels((prev) =>
-      prev.map((item, idx) => (idx === index ? { ...item, id: val, name: val } : item))
+      (prev || []).map((item, idx) => (idx === index ? { ...item, id: val, name: val } : item))
     )
   }
 
   const handleChannelToggleActive = (index) => {
     setYtChannels((prev) =>
-      prev.map((item, idx) => (idx === index ? { ...item, active: !item.active } : item))
+      (prev || []).map((item, idx) => (idx === index ? { ...item, active: !item.active } : item))
     )
   }
 
   const handleSave = async (e) => {
     if (e) e.preventDefault()
 
-    const activeYt = ytChannels.filter((c) => c.active && c.id.trim()).map((c) => c.id.trim())
-    const excludedYt = ytChannels.filter((c) => !c.active && c.id.trim()).map((c) => c.id.trim())
+    const activeYt = (ytChannels || []).filter((c) => c && c.active && c.id && c.id.trim()).map((c) => c.id.trim())
+    const excludedYt = (ytChannels || []).filter((c) => c && !c.active && c.id && c.id.trim()).map((c) => c.id.trim())
 
     const payload = {
       ...formData,
       monitor_platform: "youtube",
       target_youtube_channels: activeYt.join(","),
       excluded_youtube_channels: excludedYt.join(","),
-      target_languages: selectedLanguages.join(","),
+      target_languages: (selectedLanguages || []).join(","),
+      subtitle_style: formData.openshorts_subtitle_style || formData.subtitle_style || "bold",
+      reframe_mode: formData.openshorts_reframe_mode || formData.reframe_mode || "split",
     }
 
     try {
@@ -232,7 +262,7 @@ export default function SettingsPage({ settings = {}, onSave, isSaving }) {
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
-              {ytChannels.map((item, idx) => (
+              {(ytChannels || []).map((item, idx) => (
                 <div
                   key={idx}
                   className="flex items-center space-x-2 p-2 rounded-lg bg-[#0d131f] border border-[#1f293d]"
@@ -438,6 +468,26 @@ export default function SettingsPage({ settings = {}, onSave, isSaving }) {
                   onCheckedChange={(val) => setFormData({ ...formData, youtube_auto_upload: val })}
                 />
               </div>
+
+              {/* Reset Quota Counter */}
+              <div className="pt-2 flex items-center justify-between border-t border-[#1f293d]">
+                <div className="space-y-0.5">
+                  <span className="text-xs font-medium text-slate-200">Reset Quota Counter</span>
+                  <p className="text-[11px] text-slate-400">
+                    Reset today's recorded uploads and quota unit counter back to 0.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!isUnlocked || isResettingQuota}
+                  onClick={handleResetQuota}
+                  className="h-8 text-xs border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                >
+                  {isResettingQuota ? "Resetting..." : "Reset Counter"}
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>
@@ -469,8 +519,8 @@ export default function SettingsPage({ settings = {}, onSave, isSaving }) {
                   <span>Target Stream Languages</span>
                 </span>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1">
-                  {AVAILABLE_LANGUAGES.map((lang) => {
-                    const isChecked = selectedLanguages.includes(lang.code)
+                  {(AVAILABLE_LANGUAGES || []).map((lang) => {
+                    const isChecked = (selectedLanguages || []).includes(lang.code)
                     return (
                       <label
                         key={lang.code}
@@ -481,9 +531,9 @@ export default function SettingsPage({ settings = {}, onSave, isSaving }) {
                           disabled={!isUnlocked}
                           onCheckedChange={(chk) => {
                             if (chk) {
-                              setSelectedLanguages([...selectedLanguages, lang.code])
+                              setSelectedLanguages([...(selectedLanguages || []), lang.code])
                             } else {
-                              setSelectedLanguages(selectedLanguages.filter((c) => c !== lang.code))
+                              setSelectedLanguages((selectedLanguages || []).filter((c) => c !== lang.code))
                             }
                           }}
                         />

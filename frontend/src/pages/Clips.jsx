@@ -41,23 +41,24 @@ export default function ClipsPage({
   const [showDeleteAllDialog, setShowDeleteAllDialog] = useState(false)
 
   // Channels list for filter dropdown
-  const channels = Array.from(new Set(clips.map((c) => c.channel || c.streamer_name))).filter(Boolean)
+  const channels = Array.from(new Set((clips || []).map((c) => c.channel || c.streamer_name))).filter(Boolean)
 
   // Filter clips
-  const filteredClips = clips.filter((clip) => {
-    const title = (clip.title || clip.suggested_title || clip.clip_id || "").toLowerCase()
+  const filteredClips = (clips || []).filter((clip) => {
+    const clipId = clip.clip_id || clip.id || ""
+    const title = (clip.title || clip.suggested_title || clipId).toLowerCase()
     const channel = (clip.channel || clip.streamer_name || "").toLowerCase()
     const search = searchQuery.toLowerCase()
 
     if (search && !title.includes(search) && !channel.includes(search)) return false
     if (channelFilter !== "all" && (clip.channel || clip.streamer_name) !== channelFilter) return false
 
-    const score = Number(clip.score || clip.highlight_score || 0)
+    const score = Number(clip.score ?? clip.highlight_score ?? 0)
     if (scoreFilter === "80" && score < 80) return false
     if (scoreFilter === "60" && score < 60) return false
 
     const isImported = Boolean(
-      clip.is_imported || clip.source_type === "imported" || clip.clip_id?.startsWith("imp_")
+      clip.is_imported || clip.source_type === "imported" || clipId?.startsWith("imp_")
     )
     if (typeFilter === "live" && isImported) return false
     if (typeFilter === "imported" && !isImported) return false
@@ -76,7 +77,18 @@ export default function ClipsPage({
     if (selectedIds.length === filteredClips.length) {
       setSelectedIds([])
     } else {
-      setSelectedIds(filteredClips.map((c) => c.clip_id))
+      setSelectedIds(filteredClips.map((c) => c.clip_id || c.id))
+    }
+  }
+
+  // Process single clip
+  const handleProcessSingle = async (processId) => {
+    try {
+      await onProcessSingle(processId)
+      toast.success("Clip queued for Shorts processing!")
+    } catch (err) {
+      console.error("Failed to process clip:", err)
+      toast.error(`Failed to process clip: ${err.message || "Unknown error"}`)
     }
   }
 
@@ -84,15 +96,22 @@ export default function ClipsPage({
   const handleBatchProcess = async () => {
     if (selectedIds.length === 0) return
     let successCount = 0
+    let failCount = 0
     for (const id of selectedIds) {
       try {
         await onProcessSingle(id)
         successCount++
       } catch (err) {
+        failCount++
         console.error("Failed processing clip", id, err)
       }
     }
-    toast.success(`Queued ${successCount} clips for Shorts processing!`)
+    if (successCount > 0) {
+      toast.success(`Queued ${successCount} clips for Shorts processing!`)
+    }
+    if (failCount > 0) {
+      toast.error(`Failed to process ${failCount} clips.`)
+    }
     setSelectedIds([])
   }
 
@@ -100,25 +119,34 @@ export default function ClipsPage({
   const handleBatchDelete = async () => {
     if (selectedIds.length === 0) return
     let count = 0
+    let failCount = 0
     for (const id of selectedIds) {
       try {
         await onDeleteClip(id)
         count++
       } catch (err) {
+        failCount++
         console.error("Failed deleting clip", id, err)
       }
     }
-    toast.success(`Deleted ${count} clips.`)
+    if (count > 0) {
+      toast.success(`Deleted ${count} clips.`)
+    }
+    if (failCount > 0) {
+      toast.error(`Failed to delete ${failCount} clips.`)
+    }
     setSelectedIds([])
   }
 
   const handleDeleteSingle = async () => {
     if (!clipToDelete) return
+    const cid = clipToDelete.clip_id || clipToDelete.id
     try {
-      await onDeleteClip(clipToDelete.clip_id)
+      await onDeleteClip(cid)
       toast.success("Clip deleted successfully.")
     } catch (err) {
-      toast.error(err.message || "Failed to delete clip.")
+      console.error("Failed to delete clip:", err)
+      toast.error(`Failed to delete clip: ${err.message || "Unknown error"}`)
     } finally {
       setClipToDelete(null)
     }
@@ -278,20 +306,20 @@ export default function ClipsPage({
         </Card>
       ) : viewMode === "grid" ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredClips.map((clip) => (
-            <ClipCard
-              key={clip.clip_id}
-              clip={clip}
-              isSelected={selectedIds.includes(clip.clip_id)}
-              onToggleSelect={handleToggleSelect}
-              onPreview={(c) => setPreviewClip(c)}
-              onProcess={(cid) => {
-                onProcessSingle(cid)
-                toast.success("Clip queued for Shorts processing!")
-              }}
-              onDelete={(cid) => setClipToDelete(clip)}
-            />
-          ))}
+          {filteredClips.map((clip) => {
+            const cid = clip.clip_id || clip.id
+            return (
+              <ClipCard
+                key={cid}
+                clip={clip}
+                isSelected={selectedIds.includes(cid)}
+                onToggleSelect={handleToggleSelect}
+                onPreview={(c) => setPreviewClip(c)}
+                onProcess={handleProcessSingle}
+                onDelete={() => setClipToDelete(clip)}
+              />
+            )
+          })}
         </div>
       ) : (
         <ClipTable
@@ -300,12 +328,9 @@ export default function ClipsPage({
           onToggleSelect={handleToggleSelect}
           onToggleSelectAll={handleToggleSelectAll}
           onPreview={(c) => setPreviewClip(c)}
-          onProcess={(cid) => {
-            onProcessSingle(cid)
-            toast.success("Clip queued for Shorts processing!")
-          }}
-          onDelete={(cid) => {
-            const target = clips.find((c) => c.clip_id === cid)
+          onProcess={handleProcessSingle}
+          onDelete={(deleteId) => {
+            const target = clips.find((c) => (c.clip_id || c.id) === deleteId)
             if (target) setClipToDelete(target)
           }}
         />

@@ -24,9 +24,11 @@ from app.clipper.audio_energy import (
 )
 from app.clipper.downloader import (
     VideoMetadata,
+    download_video,
     extract_youtube_id,
     fetch_video_info,
     is_valid_youtube_url,
+    parse_timestamp_seconds,
 )
 from app.clipper.extractor import extract_clip
 from app.clipper.models import ImportClip, ImportJob, TranscriptSegment
@@ -91,6 +93,33 @@ class TestClipperDownloader(unittest.TestCase):
         self.assertEqual(meta.duration, 360.0)
         self.assertEqual(meta.view_count, 50000000)
         self.assertEqual(len(meta.chapters), 1)
+
+    @mock.patch("yt_dlp.YoutubeDL")
+    def test_download_video_subtitles_rate_limit_fallback(self, mock_ydl_cls):
+        """Verify that when subtitle download hits 429 Too Many Requests, video download continues without error."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_dir = Path(tmp_dir)
+
+            call_count = [0]
+            def _mock_download(urls):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    raise RuntimeError("HTTP Error 429: Too Many Requests on subtitle segment")
+                # Second call (without subtitles) succeeds and creates source.mp4
+                (out_dir / "source.mp4").write_bytes(b"dummy_mp4_bytes")
+
+            mock_ydl = mock.MagicMock()
+            mock_ydl.download.side_effect = _mock_download
+            mock_ydl_cls.return_value.__enter__.return_value = mock_ydl
+
+            source_mp4, sub_path = download_video(
+                url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                output_dir=out_dir,
+            )
+
+            self.assertTrue(source_mp4.is_file())
+            self.assertIsNone(sub_path)  # Subtitles gracefully skipped
+            self.assertGreaterEqual(call_count[0], 2)
 
 
 class TestClipperAudioEnergy(unittest.TestCase):
@@ -271,6 +300,40 @@ class TestClipperAPI(unittest.TestCase):
         resp_clips = self.client.get("/api/import/clips")
         self.assertEqual(resp_clips.status_code, 200)
         self.assertIsInstance(resp_clips.json(), list)
+
+    def test_parse_timestamp_seconds(self):
+        self.assertEqual(parse_timestamp_seconds("01:23:45"), 5025.0)
+        self.assertEqual(parse_timestamp_seconds("5:30"), 330.0)
+        self.assertEqual(parse_timestamp_seconds("45"), 45.0)
+        self.assertEqual(parse_timestamp_seconds(120), 120.0)
+        self.assertIsNone(parse_timestamp_seconds(None))
+        self.assertIsNone(parse_timestamp_seconds(""))
+
+    def test_cancel_nonexistent_job(self):
+        resp = self.client.post("/api/import/jobs/nonexistent_job_123/cancel")
+        self.assertEqual(resp.status_code, 404)
+
+    def test_cleanup_confirmation_required(self):
+        resp = self.client.delete("/api/import/clips")
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("confirm=true", resp.json()["detail"])
+
+        resp_ok = self.client.delete("/api/import/clips?confirm=true")
+        self.assertEqual(resp_ok.status_code, 200)
+        self.assertIn("freed_mb", resp_ok.json())
+
+    def test_library_endpoints(self):
+        resp_lib = self.client.get("/api/import/library")
+        self.assertEqual(resp_lib.status_code, 200)
+        self.assertIsInstance(resp_lib.json(), list)
+
+    def test_quota_reset_endpoint(self):
+        resp = self.client.post("/api/upload/quota/reset")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["uploads_today"], 0)
+        self.assertIn("resets_in_human", data)
+        self.assertIn("resets_in_seconds", data)
 
 
 if __name__ == "__main__":

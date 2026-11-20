@@ -134,6 +134,9 @@ class Settings:
     target_languages: tuple[str, ...] = ("en", "hi")
     shorts_output_bitrate: str = "6M"
     shorts_output_crf: int = 18
+    youtube_upload_bitrate: str = "12M"
+    youtube_upload_crf: int = 15
+    youtube_upload_audio_bitrate: str = "256k"
     youtube_chat_poll_interval: float = 2.0
     # --- YouTube Video Clipper (Import feature) ---
     import_max_clips: int = 5
@@ -334,6 +337,9 @@ def load_settings(env_file: Path | str | None = None) -> Settings:
         target_languages=target_languages,
         shorts_output_bitrate=os.getenv("SHORTS_OUTPUT_BITRATE", "6M").strip() or "6M",
         shorts_output_crf=_int_env("SHORTS_OUTPUT_CRF", 18),
+        youtube_upload_bitrate=os.getenv("YOUTUBE_UPLOAD_BITRATE", "12M").strip() or "12M",
+        youtube_upload_crf=_int_env("YOUTUBE_UPLOAD_CRF", 15),
+        youtube_upload_audio_bitrate=os.getenv("YOUTUBE_UPLOAD_AUDIO_BITRATE", "256k").strip() or "256k",
         youtube_chat_poll_interval=_float_env("YOUTUBE_CHAT_POLL_INTERVAL", 2.0),
         import_max_clips=_int_env("IMPORT_MAX_CLIPS", 5),
         import_clip_duration=_float_env("IMPORT_CLIP_DURATION", 55.0),

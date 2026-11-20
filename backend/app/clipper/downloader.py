@@ -38,6 +38,33 @@ def is_valid_youtube_url(url: str) -> bool:
     return extract_youtube_id(url) is not None
 
 
+def parse_timestamp_seconds(val: str | float | int | None) -> float | None:
+    """Parse time string like 'HH:MM:SS', 'MM:SS', or numeric seconds to float seconds."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return max(0.0, float(val))
+    val_str = str(val).strip()
+    if not val_str:
+        return None
+    try:
+        return max(0.0, float(val_str))
+    except ValueError:
+        pass
+    parts = val_str.split(":")
+    try:
+        parts_f = [float(p) for p in parts]
+        if len(parts_f) == 3:  # HH:MM:SS
+            return parts_f[0] * 3600.0 + parts_f[1] * 60.0 + parts_f[2]
+        elif len(parts_f) == 2:  # MM:SS
+            return parts_f[0] * 60.0 + parts_f[1]
+        elif len(parts_f) == 1:
+            return parts_f[0]
+    except Exception:
+        pass
+    return None
+
+
 def fetch_video_info(url: str) -> VideoMetadata:
     """Retrieve metadata for a YouTube URL without downloading media."""
     video_id = extract_youtube_id(url)
@@ -123,28 +150,56 @@ def download_video(
         "subtitlesformat": "vtt/srt/best",
         "quiet": True,
         "no_warnings": True,
+        "ignoreerrors": "only_download",
         "progress_hooks": [_progress_hook],
     }
 
+    def _find_video_file() -> Path | None:
+        target = output_dir / "source.mp4"
+        if target.is_file() and target.stat().st_size > 0:
+            return target
+        candidates = list(output_dir.glob("source.*"))
+        video_candidates = [
+            c for c in candidates if c.suffix.lower() in (".mp4", ".mkv", ".webm") and c.stat().st_size > 0
+        ]
+        return video_candidates[0] if video_candidates else None
+
+    # Step 1: Attempt download with subtitles
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
     except Exception as exc:
-        log.error("yt-dlp download failed for %s: %s", url, exc)
-        raise RuntimeError(f"Failed to download video: {exc}") from exc
+        log.warning("yt-dlp download with subtitles failed (%s); checking video or retrying without subtitles...", exc)
+        # Check if video was downloaded despite the subtitle error (common on 429 subtitle rate limit)
+        existing_video = _find_video_file()
+        if not existing_video:
+            if progress_cb:
+                progress_cb(12.0, "Subtitles unavailable; downloading video stream...")
+            ydl_opts_nosub: dict[str, Any] = {
+                "format": f"bestvideo[height<={max_quality}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={max_quality}]+bestaudio/best[height<={max_quality}]/best",
+                "outtmpl": output_template,
+                "merge_output_format": "mp4",
+                "writesubtitles": False,
+                "writeautomaticsub": False,
+                "quiet": True,
+                "no_warnings": True,
+                "progress_hooks": [_progress_hook],
+            }
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts_nosub) as ydl_nosub:
+                    ydl_nosub.download([url])
+            except Exception as vid_exc:
+                log.error("yt-dlp video download without subtitles also failed: %s", vid_exc)
+                raise RuntimeError(f"Failed to download video: {vid_exc}") from vid_exc
 
-    source_mp4 = output_dir / "source.mp4"
-    if not source_mp4.is_file():
-        # Check if downloaded with different container and remux
-        candidates = list(output_dir.glob("source.*"))
-        video_candidates = [c for c in candidates if c.suffix.lower() in (".mp4", ".mkv", ".webm")]
-        if video_candidates:
-            source_mp4 = video_candidates[0]
-        else:
-            raise FileNotFoundError(f"Source video file not found in {output_dir}")
+    source_mp4 = _find_video_file()
+    if not source_mp4 or not source_mp4.is_file():
+        raise FileNotFoundError(f"Source video file not found in {output_dir}")
 
     # Locate subtitle file if available
     sub_candidates = list(output_dir.glob("source*.vtt")) + list(output_dir.glob("source*.srt"))
     subtitle_path: Path | None = sub_candidates[0] if sub_candidates else None
+    if not subtitle_path:
+        log.warning("Subtitles unavailable for %s (will use Whisper transcription instead)", url)
 
     return source_mp4, subtitle_path

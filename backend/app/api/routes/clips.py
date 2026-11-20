@@ -6,9 +6,11 @@ from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
+import subprocess
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi.responses import FileResponse
 
 from app.api.events import ws_manager
 from app.api.media_stream import range_stream_response
@@ -120,11 +122,13 @@ def list_clips(
 
         output.append({
             "id": cid,
+            "clip_id": cid,
             "filename": src_path.name,
             "filepath": str(src_path),
             "channel": c_channel,
             "platform": c_platform,
             "score": score,
+            "highlight_score": score,
             "title": rec.get("title") or analysis.get("title") or "Stream Highlight",
             "category": rec.get("category") or analysis.get("category") or "highlight",
             "duration": round(duration, 1),
@@ -156,6 +160,53 @@ def preview_clip(clip_id: str, request: Request) -> Any:
         )
 
     return range_stream_response(mp4_path, request, media_type="video/mp4")
+
+
+@router.get("/clips/{clip_id}/thumbnail")
+def get_clip_thumbnail(clip_id: str) -> FileResponse:
+    """Serve or generate a JPEG thumbnail snapshot for an extracted clip."""
+    settings = load_settings()
+    clips_dir = settings.clips_output_dir
+    mp4_path, _ = _find_clip_file_by_id(clips_dir, clip_id)
+
+    if not mp4_path or not mp4_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Clip video file with ID '{clip_id}' was not found.",
+        )
+
+    # Check for existing thumbnail
+    thumb_path = mp4_path.parent / f"{mp4_path.stem}_thumb.jpg"
+    if not thumb_path.is_file():
+        thumb_path = mp4_path.parent / f"{clip_id}_thumb.jpg"
+
+    if not thumb_path.is_file():
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y",
+                    "-ss", "00:00:01",
+                    "-i", str(mp4_path),
+                    "-vframes", "1",
+                    "-q:v", "2",
+                    str(thumb_path),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=15,
+            )
+        except Exception as exc:
+            log.warning("Could not generate thumbnail for clip %s: %s", clip_id, exc)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Thumbnail could not be generated for clip '{clip_id}'.",
+            )
+
+    return FileResponse(
+        path=str(thumb_path),
+        media_type="image/jpeg",
+        filename=f"{clip_id}.jpg",
+    )
 
 
 @router.delete("/clips/{clip_id}")

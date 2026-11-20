@@ -49,10 +49,11 @@ export default function ShortsPage({
   const [isVerifyingAll, setIsVerifyingAll] = useState(false)
 
   // Filter channels
-  const channels = Array.from(new Set(shorts.map((s) => s.channel))).filter(Boolean)
+  const channels = Array.from(new Set((shorts || []).map((s) => s.channel))).filter(Boolean)
 
-  const filteredShorts = shorts.filter((short) => {
-    const title = (short.title || short.clip_id || "").toLowerCase()
+  const filteredShorts = (shorts || []).filter((short) => {
+    const clipId = short.clip_id || short.id || ""
+    const title = (short.title || short.selected_title || clipId).toLowerCase()
     const channel = (short.channel || "").toLowerCase()
     const search = searchQuery.toLowerCase()
 
@@ -80,7 +81,7 @@ export default function ShortsPage({
     if (selectedIds.length === filteredShorts.length) {
       setSelectedIds([])
     } else {
-      setSelectedIds(filteredShorts.map((s) => s.clip_id))
+      setSelectedIds(filteredShorts.map((s) => s.clip_id || s.id))
     }
   }
 
@@ -129,29 +130,49 @@ export default function ShortsPage({
     }
   }
 
+  // Single Upload handler
+  const handleUploadSingle = async (uploadId) => {
+    try {
+      await onUploadSingle(uploadId)
+      toast.success("Short queued for YouTube upload!")
+    } catch (err) {
+      console.error("Failed to upload short:", err)
+      toast.error(`Failed to upload short: ${err.message || "Unknown error"}`)
+    }
+  }
+
   // Batch Upload
   const handleBatchUpload = async () => {
     if (selectedIds.length === 0) return
     let count = 0
+    let failed = 0
     for (const id of selectedIds) {
       try {
         await onUploadSingle(id)
         count++
       } catch (err) {
+        failed++
         console.error("Batch upload failed for", id, err)
       }
     }
-    toast.success(`Queued ${count} shorts for upload!`)
+    if (count > 0) {
+      toast.success(`Queued ${count} shorts for upload!`)
+    }
+    if (failed > 0) {
+      toast.error(`Failed to queue ${failed} shorts for upload.`)
+    }
     setSelectedIds([])
   }
 
   const handleDeleteSingle = async () => {
     if (!shortToDelete) return
+    const cid = shortToDelete.clip_id || shortToDelete.id
     try {
-      await onDeleteShort(shortToDelete.clip_id)
+      await onDeleteShort(cid)
       toast.success("Short deleted successfully.")
     } catch (err) {
-      toast.error(err.message || "Failed to delete short.")
+      console.error("Failed to delete short:", err)
+      toast.error(`Failed to delete short: ${err.message || "Unknown error"}`)
     } finally {
       setShortToDelete(null)
     }
@@ -298,24 +319,24 @@ export default function ShortsPage({
         </Card>
       ) : viewMode === "grid" ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {filteredShorts.map((short) => (
-            <ShortCard
-              key={short.clip_id}
-              shortItem={short}
-              isSelected={selectedIds.includes(short.clip_id)}
-              onToggleSelect={handleToggleSelect}
-              onPreview={(s) => setPreviewShort(s)}
-              onUpload={(cid) => {
-                onUploadSingle(cid)
-                toast.success("Short queued for YouTube upload!")
-              }}
-              onVerify={handleVerify}
-              onReupload={handleReupload}
-              onDelete={(cid) => setShortToDelete(short)}
-              uploadState={uploadTasks[short.clip_id]}
-              verifyState={verifyMap[short.clip_id]}
-            />
-          ))}
+          {filteredShorts.map((short) => {
+            const cid = short.clip_id || short.id
+            return (
+              <ShortCard
+                key={cid}
+                shortItem={short}
+                isSelected={selectedIds.includes(cid)}
+                onToggleSelect={handleToggleSelect}
+                onPreview={(s) => setPreviewShort(s)}
+                onUpload={handleUploadSingle}
+                onVerify={handleVerify}
+                onReupload={handleReupload}
+                onDelete={() => setShortToDelete(short)}
+                uploadState={uploadTasks[cid]}
+                verifyState={verifyMap[cid]}
+              />
+            )
+          })}
         </div>
       ) : (
         <ShortTable
@@ -324,14 +345,11 @@ export default function ShortsPage({
           onToggleSelect={handleToggleSelect}
           onToggleSelectAll={handleToggleSelectAll}
           onPreview={(s) => setPreviewShort(s)}
-          onUpload={(cid) => {
-            onUploadSingle(cid)
-            toast.success("Short queued for YouTube upload!")
-          }}
+          onUpload={handleUploadSingle}
           onVerify={handleVerify}
           onReupload={handleReupload}
-          onDelete={(cid) => {
-            const target = shorts.find((s) => s.clip_id === cid)
+          onDelete={(deleteId) => {
+            const target = shorts.find((s) => (s.clip_id || s.id) === deleteId)
             if (target) setShortToDelete(target)
           }}
         />

@@ -21,34 +21,47 @@ export function ClipCard({
   onProcess,
   onDelete,
 }) {
+  const clipId = (clip.clip_id && clip.clip_id !== "undefined")
+    ? clip.clip_id
+    : (clip.id && clip.id !== "undefined")
+    ? clip.id
+    : ""
   const isImported = Boolean(
-    clip.is_imported || clip.source_type === "imported" || clip.clip_id?.startsWith("imp_")
+    clip.is_imported || clip.source_type === "imported" || clipId?.startsWith("imp_")
   )
-  const score = Number(clip.score || clip.highlight_score || 0)
+  const score = Number(clip.score ?? clip.highlight_score ?? 0)
   const scoreVariant = score >= 80 ? "success" : score >= 60 ? "warning" : "destructive"
 
-  const thumbnailSrc = isImported
-    ? `/api/import/clips/${clip.clip_id}/thumbnail`
-    : `/api/clips/${clip.clip_id}/thumbnail`
+  const thumbnailSrc = clipId
+    ? isImported
+      ? `/api/import/clips/${clipId}/thumbnail`
+      : `/api/clips/${clipId}/thumbnail`
+    : null
 
-  const dateStr = formatRecordedDate(clip.created_at || clip.timestamp)
+  const dateStr = formatRecordedDate(clip.created_at || clip.timestamp || clip.recorded_at_iso)
 
   return (
     <Card className="overflow-hidden border-[#1f293d] bg-[#121826]/90 hover:border-slate-600 transition-all group flex flex-col justify-between">
       <div>
         {/* Thumbnail banner with play trigger */}
         <div
-          className="relative aspect-video bg-black/60 cursor-pointer overflow-hidden"
+          className="relative aspect-video bg-black/60 cursor-pointer overflow-hidden flex items-center justify-center"
           onClick={() => onPreview(clip)}
         >
-          <img
-            src={thumbnailSrc}
-            alt={clip.title || clip.suggested_title}
-            className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-            onError={(e) => {
-              e.currentTarget.style.display = "none"
-            }}
-          />
+          {thumbnailSrc ? (
+            <img
+              src={thumbnailSrc}
+              alt={clip.title || clip.suggested_title}
+              className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+              onError={(e) => {
+                e.currentTarget.style.display = "none"
+              }}
+            />
+          ) : (
+            <div className="flex items-center justify-center h-full text-slate-500">
+              <Film className="w-8 h-8 opacity-40" />
+            </div>
+          )}
           {/* Overlay gradient */}
           <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/30" />
 
@@ -60,7 +73,7 @@ export function ClipCard({
             <div className="flex items-center space-x-2">
               <Checkbox
                 checked={isSelected}
-                onCheckedChange={() => onToggleSelect(clip.clip_id)}
+                onCheckedChange={() => onToggleSelect(clipId)}
                 className="bg-black/60 border-slate-500"
               />
               <Badge variant={isImported ? "purple" : "secondary"} className="text-[10px] shadow">
@@ -92,7 +105,7 @@ export function ClipCard({
               className="text-sm font-semibold text-white line-clamp-1 hover:text-blue-400 cursor-pointer"
               onClick={() => onPreview(clip)}
             >
-              {clip.title || clip.suggested_title || clip.clip_id}
+              {clip.title || clip.suggested_title || clipId}
             </h4>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -105,12 +118,12 @@ export function ClipCard({
                   <Play className="w-3.5 h-3.5 mr-2" />
                   <span>Preview</span>
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => onProcess(clip.clip_id)}>
+                <DropdownMenuItem onClick={() => onProcess(clipId)}>
                   <Film className="w-3.5 h-3.5 mr-2 text-blue-400" />
                   <span>Process to Short</span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => onDelete(clip.clip_id)} className="text-red-400 hover:text-red-300">
+                <DropdownMenuItem onClick={() => onDelete(clipId)} className="text-red-400 hover:text-red-300">
                   <Trash2 className="w-3.5 h-3.5 mr-2" />
                   <span>Delete</span>
                 </DropdownMenuItem>
@@ -138,7 +151,7 @@ export function ClipCard({
         <Button
           variant="outline"
           size="sm"
-          onClick={() => onProcess(clip.clip_id)}
+          onClick={() => onProcess(clipId)}
           className="w-full text-xs flex items-center justify-center space-x-1.5 border-[#1f293d] hover:bg-blue-600 hover:text-white hover:border-transparent transition-all"
         >
           <Film className="w-3.5 h-3.5" />

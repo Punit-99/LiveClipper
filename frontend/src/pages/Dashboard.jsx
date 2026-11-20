@@ -49,21 +49,30 @@ export default function Dashboard({
   onWaitTarget,
   onNavigate,
   onRefresh,
+  onOpenStartModal,
 }) {
-  const [showChannelModal, setShowChannelModal] = useState(false)
   const [liveChannelsList, setLiveChannelsList] = useState([])
-  const [selectedChannels, setSelectedChannels] = useState([])
-  const [isLoadingChannels, setIsLoadingChannels] = useState(false)
-  const [isStarting, setIsStarting] = useState(false)
   const [isCheckingLive, setIsCheckingLive] = useState(false)
+  const [isBannerDismissed, setIsBannerDismissed] = useState(false)
+  const [lastMonitoringState, setLastMonitoringState] = useState(status?.is_monitoring)
+
+  // Reset dismissal if monitoring toggles
+  if (status?.is_monitoring !== lastMonitoringState) {
+    setLastMonitoringState(status?.is_monitoring)
+    if (status?.is_monitoring) {
+      setIsBannerDismissed(false)
+    }
+  }
 
   // Fallback streams state
-  const fallbackStreams = status?.fallback_streams || []
+  const fallbackStreams = Array.isArray(status?.fallback_streams) ? status.fallback_streams : []
   const waitingTargetChannels = status?.waiting_target_channels
 
   const isMonitoring = status?.is_monitoring
-  const activeChannels = status?.active_channels || []
-  const targetChannels = status?.target_channels || []
+  const activeChannels = Array.isArray(status?.active_channels) ? status.active_channels : []
+  const targetChannels = Array.isArray(status?.target_channels)
+    ? status.target_channels
+    : (typeof status?.target_channels === "string" ? status.target_channels.split(",").map((s) => s.trim()).filter(Boolean) : [])
   const uptime = status?.uptime_seconds || 0
 
   const liveStats = status?.live_stats || {}
@@ -72,41 +81,6 @@ export default function Dashboard({
   const bufferMb = liveStats.buffer_mb || 0
   const maxBufferMb = settings?.max_total_buffer_mb || 1500
 
-  const maxConcurrent = settings?.multi_stream_enabled ? (Number(settings?.max_concurrent_streams) || 2) : 1
-
-  // Handle opening stream selection modal
-  const handleOpenStartModal = async () => {
-    setIsLoadingChannels(true)
-    setShowChannelModal(true)
-    try {
-      const data = await fetchChannelsLiveStatus()
-      const list = data.channels || []
-      setLiveChannelsList(list)
-
-      // Auto-select live channels up to maxConcurrent
-      const liveOnes = list.filter((c) => c.is_live).map((c) => c.name || c.channel_id)
-      setSelectedChannels(liveOnes.slice(0, maxConcurrent))
-    } catch (err) {
-      toast.error("Failed to fetch channel status: " + err.message)
-      setLiveChannelsList([])
-    } finally {
-      setIsLoadingChannels(false)
-    }
-  }
-
-  const handleConfirmStart = async () => {
-    setIsStarting(true)
-    try {
-      await onStartMonitoring({ channels: selectedChannels })
-      setShowChannelModal(false)
-      toast.success("Stream monitoring started.")
-    } catch (err) {
-      toast.error(err.message || "Failed to start monitoring.")
-    } finally {
-      setIsStarting(false)
-    }
-  }
-
   const handleManualCheckLive = async () => {
     setIsCheckingLive(true)
     try {
@@ -114,17 +88,50 @@ export default function Dashboard({
       setLiveChannelsList(data.channels || [])
       toast.success("Channel live status updated.")
     } catch (err) {
-      toast.error("Failed to check live status: " + err.message)
+      console.error("Failed to check live status:", err)
+      toast.error(`Failed to check live status: ${err.message || "Unknown error"}`)
     } finally {
       setIsCheckingLive(false)
+    }
+  }
+
+  const handleApprove = async (streamId) => {
+    try {
+      await onApproveFallback(streamId)
+      toast.success(`Fallback stream ${streamId} approved!`)
+    } catch (err) {
+      console.error("Failed to approve fallback stream:", err)
+      toast.error(`Failed to approve stream: ${err.message || "Unknown error"}`)
+    }
+  }
+
+  const handleWait = async () => {
+    try {
+      await onWaitTarget()
+      toast.info("Waiting for target channels to come online.")
+    } catch (err) {
+      console.error("Failed to set wait targets:", err)
+      toast.error(`Failed to set wait target: ${err.message || "Unknown error"}`)
     }
   }
 
   return (
     <div className="space-y-6">
       {/* Fallback stream notification banner */}
-      {fallbackStreams.length > 0 && !waitingTargetChannels && (
-        <Alert variant="warning" className="border-amber-500/30 bg-amber-500/10 backdrop-blur-md">
+      {fallbackStreams.length > 0 && !waitingTargetChannels && !isBannerDismissed && (
+        <Alert variant="warning" className="relative border-amber-500/30 bg-amber-500/10 backdrop-blur-md pr-10">
+          <button
+            type="button"
+            onClick={() => {
+              setIsBannerDismissed(true)
+              handleWait()
+            }}
+            className="absolute top-3 right-3 text-amber-400/80 hover:text-white transition-colors p-1 rounded-md"
+            title="Dismiss and keep waiting"
+            aria-label="Dismiss banner"
+          >
+            <X className="w-4 h-4" />
+          </button>
           <AlertTriangle className="h-4 w-4 text-amber-400" />
           <AlertTitle className="text-white font-semibold">
             Target channels offline — Fallback streams found
@@ -134,34 +141,44 @@ export default function Dashboard({
               None of your configured target channels are currently live. Would you like to monitor an alternative live stream or keep waiting?
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 pt-1">
-              {fallbackStreams.map((stream) => (
-                <div
-                  key={stream.channel || stream.id}
-                  className="p-3 rounded-lg bg-[#0d131f] border border-[#1f293d] flex items-center justify-between"
-                >
-                  <div className="min-w-0 pr-2">
-                    <h5 className="font-semibold text-xs text-white truncate">
-                      {stream.channel || stream.title}
-                    </h5>
-                    <p className="text-[11px] text-slate-400">
-                      {(stream.viewers || stream.viewer_count || 0).toLocaleString()} viewers · {stream.game || "Gaming"}
-                    </p>
-                  </div>
-                  <Button
-                    size="sm"
-                    onClick={() => onApproveFallback(stream.channel || stream.id)}
-                    className="h-7 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium shrink-0"
+              {(fallbackStreams || []).map((stream) => {
+                const channelName = stream.channel_name || stream.channel || stream.channel_id || "Streamer"
+                const viewers = stream.viewer_count || stream.viewers || 0
+                const category = stream.category || stream.game || "Gaming"
+                const streamId = stream.channel || stream.channel_id || stream.id
+
+                return (
+                  <div
+                    key={streamId}
+                    className="p-3 rounded-lg bg-[#0d131f] border border-[#1f293d] flex items-center justify-between gap-2"
                   >
-                    Approve
-                  </Button>
-                </div>
-              ))}
+                    <div className="min-w-0 pr-1">
+                      <p className="text-xs text-white truncate">
+                        <strong className="font-bold text-white">{channelName}</strong>
+                        <span className="text-slate-400 font-normal"> · {viewers.toLocaleString()} viewers · {category}</span>
+                      </p>
+                      {stream.stream_title && (
+                        <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                          {stream.stream_title}
+                        </p>
+                      )}
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={() => handleApprove(streamId)}
+                      className="h-7 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium shrink-0"
+                    >
+                      Approve
+                    </Button>
+                  </div>
+                )
+              })}
             </div>
             <div className="pt-1 flex items-center space-x-2">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={onWaitTarget}
+                onClick={handleWait}
                 className="text-xs border-amber-500/40 text-amber-300 hover:bg-amber-500/20"
               >
                 Keep Waiting for Target Channels
@@ -225,99 +242,8 @@ export default function Dashboard({
         isMonitoring={isMonitoring}
         onCheckLiveStatus={handleManualCheckLive}
         isCheckingLive={isCheckingLive}
+        onOpenStartModal={onOpenStartModal}
       />
-
-      {/* Channel Selection Modal on Start Monitoring */}
-      <Dialog open={showChannelModal} onOpenChange={setShowChannelModal}>
-        <DialogContent className="max-w-lg bg-[#0f1422] border-[#1f293d]">
-          <DialogHeader>
-            <DialogTitle className="text-white text-base">Select Channels to Monitor</DialogTitle>
-            <DialogDescription className="text-xs text-slate-400">
-              Check channels to monitor. Maximum concurrent streams: {maxConcurrent}.
-            </DialogDescription>
-          </DialogHeader>
-
-          {isLoadingChannels ? (
-            <div className="py-8 flex flex-col items-center justify-center space-y-2 text-xs text-slate-400">
-              <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
-              <span>Checking channel live statuses...</span>
-            </div>
-          ) : (
-            <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
-              {liveChannelsList.map((ch) => {
-                const id = ch.name || ch.channel_id
-                const isLive = Boolean(ch.is_live || ch.live)
-                const isChecked = selectedChannels.includes(id)
-
-                return (
-                  <div
-                    key={id}
-                    className={`p-3 rounded-lg border flex items-center justify-between transition-colors ${
-                      isLive
-                        ? "bg-[#121826] border-[#1f293d] hover:border-slate-600"
-                        : "bg-[#0a0d14] border-[#161c28] opacity-60"
-                    }`}
-                  >
-                    <div className="flex items-center space-x-3 min-w-0">
-                      <Checkbox
-                        checked={isChecked}
-                        disabled={!isLive}
-                        onCheckedChange={(checked) => {
-                          if (checked) {
-                            if (selectedChannels.length < maxConcurrent) {
-                              setSelectedChannels([...selectedChannels, id])
-                            } else {
-                              toast.warning(`Maximum ${maxConcurrent} concurrent streams allowed.`)
-                            }
-                          } else {
-                            setSelectedChannels(selectedChannels.filter((c) => c !== id))
-                          }
-                        }}
-                      />
-                      <div className="min-w-0">
-                        <span className="block text-xs font-semibold text-white truncate">
-                          {ch.display_name || ch.name}
-                        </span>
-                        <span className="text-[11px] text-slate-400">
-                          {isLive ? `${(ch.viewer_count || 0).toLocaleString()} viewers` : "Offline"}
-                        </span>
-                      </div>
-                    </div>
-
-                    <Badge variant={isLive ? "success" : "secondary"} className="text-[10px]">
-                      {isLive ? "LIVE" : "OFFLINE"}
-                    </Badge>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-
-          <DialogFooter className="pt-3 border-t border-[#1f293d] flex items-center justify-between sm:justify-between">
-            <span className="text-xs text-slate-400">
-              Selected: {selectedChannels.length} / {maxConcurrent}
-            </span>
-            <div className="flex items-center space-x-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowChannelModal(false)}
-                className="text-xs border-[#1f293d]"
-              >
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleConfirmStart}
-                disabled={isStarting || selectedChannels.length === 0}
-                className="text-xs bg-blue-600 hover:bg-blue-500 text-white font-semibold"
-              >
-                {isStarting ? "Starting..." : "Start Monitoring"}
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

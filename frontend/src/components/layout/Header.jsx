@@ -14,6 +14,7 @@ import {
   Film,
   Radio,
   Settings,
+  RotateCw,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -53,6 +54,7 @@ export function Header({
   onOpenCommand,
   queueStatus,
   onOpenQueue,
+  onRefreshQuota,
 }) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const isRecording = monitoringStatus?.is_monitoring
@@ -159,13 +161,58 @@ export function Header({
         )}
 
         {/* YouTube Quota badge */}
-        <div className="hidden sm:flex items-center space-x-2 bg-[#121826] border border-[#1f293d] px-2.5 py-1.5 rounded-lg text-xs">
-          <Youtube className="w-3.5 h-3.5 text-red-500" />
-          <span className="text-slate-400">Quota:</span>
-          <span className="font-semibold text-slate-200">
-            {quota ? `${quota.uploads_today}/${quota.daily_limit}` : "0/5"}
-          </span>
-        </div>
+        {(() => {
+          const uploads = quota?.uploads_today ?? 0
+          const limit = quota?.daily_limit ?? 5
+          const isExceeded = quota?.quota_exceeded || uploads >= limit
+          const isWarning = !isExceeded && uploads / limit >= 0.8
+          const resetsIn = quota?.resets_in_human || ""
+
+          return (
+            <div
+              className={cn(
+                "hidden sm:flex items-center space-x-2 border px-2.5 py-1.5 rounded-lg text-xs transition-colors",
+                isExceeded
+                  ? "bg-red-500/15 border-red-500/40 text-red-400"
+                  : isWarning
+                  ? "bg-amber-500/15 border-amber-500/40 text-amber-300"
+                  : "bg-[#121826] border-[#1f293d] text-slate-300"
+              )}
+              title={
+                isExceeded
+                  ? `Daily quota limit reached (${uploads}/${limit}). ${resetsIn}`
+                  : `YouTube Upload Quota: ${uploads}/${limit} used today. ${resetsIn}`
+              }
+            >
+              <Youtube className={cn("w-3.5 h-3.5 shrink-0", isExceeded ? "text-red-400" : "text-red-500")} />
+              {isExceeded ? (
+                <span className="font-bold text-red-400 tracking-wide text-[11px]">QUOTA EXCEEDED</span>
+              ) : (
+                <>
+                  <span className="text-slate-400">Quota:</span>
+                  <span className={cn("font-semibold", isWarning ? "text-amber-300" : "text-slate-200")}>
+                    {uploads}/{limit}
+                  </span>
+                </>
+              )}
+              {resetsIn && (
+                <span className="text-[10px] text-slate-400 hidden xl:inline border-l border-slate-700/60 pl-1.5">
+                  {resetsIn}
+                </span>
+              )}
+              {onRefreshQuota && (
+                <button
+                  type="button"
+                  onClick={onRefreshQuota}
+                  className="text-slate-400 hover:text-white transition-colors ml-0.5"
+                  title="Refresh Quota"
+                >
+                  <RotateCw className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          )
+        })()}
 
         {/* Start / Stop Monitoring Button */}
         <Button

@@ -13,9 +13,11 @@ import random
 import tempfile
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Callable
+import subprocess
 
 import requests
 
@@ -79,6 +81,20 @@ class DailyQuotaTracker:
         """Default date provider: current UTC date string YYYY-MM-DD."""
         return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+    @staticmethod
+    def get_pacific_time_info() -> tuple[int, str]:
+        """Calculate seconds and human countdown until midnight Pacific Time (PT)."""
+        try:
+            pt_tz = ZoneInfo("America/Los_Angeles")
+            now_pt = datetime.now(pt_tz)
+            next_midnight_pt = now_pt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            diff_sec = max(0, int((next_midnight_pt - now_pt).total_seconds()))
+            hours = diff_sec // 3600
+            mins = (diff_sec % 3600) // 60
+            return diff_sec, f"Resets in {hours}h {mins}m"
+        except Exception:
+            return 86400, "Resets at midnight PT"
+
     def get_today_date(self) -> str:
         return self._date_fn()
 
@@ -90,6 +106,7 @@ class DailyQuotaTracker:
     def _get_status_locked(self) -> dict[str, Any]:
         today = self.get_today_date()
         data = self._read_quota_file_locked()
+        resets_in_sec, resets_in_human = self.get_pacific_time_info()
         if not data or data.get("date") != today:
             # New day: reset counters
             return {
@@ -98,13 +115,25 @@ class DailyQuotaTracker:
                 "units_used": 0,
                 "daily_limit": self.daily_limit,
                 "max_units": self.max_units,
+                "quota_exceeded": False,
+                "resets_in_seconds": resets_in_sec,
+                "resets_in_human": resets_in_human,
+                "usage_percent": 0.0,
             }
+        uploads = int(data.get("uploads_today", 0))
+        units = int(data.get("units_used", 0))
+        pct = round(max((uploads / self.daily_limit), (units / self.max_units)) * 100.0, 1)
+        exceeded = bool(data.get("quota_exceeded") or uploads >= self.daily_limit or units >= self.max_units)
         return {
             "date": today,
-            "uploads_today": int(data.get("uploads_today", 0)),
-            "units_used": int(data.get("units_used", 0)),
+            "uploads_today": uploads,
+            "units_used": units,
             "daily_limit": self.daily_limit,
             "max_units": self.max_units,
+            "quota_exceeded": exceeded,
+            "resets_in_seconds": resets_in_sec,
+            "resets_in_human": resets_in_human,
+            "usage_percent": pct,
         }
 
     def can_upload(self) -> tuple[bool, str]:
@@ -154,6 +183,10 @@ class DailyQuotaTracker:
 
     def reset_today(self) -> None:
         """Reset quota for today (primarily for testing)."""
+        self.reset_counter()
+
+    def reset_counter(self) -> None:
+        """Reset the quota counter to 0."""
         with self._lock:
             today = self.get_today_date()
             payload = {
@@ -162,9 +195,20 @@ class DailyQuotaTracker:
                 "units_used": 0,
                 "daily_limit": self.daily_limit,
                 "max_units": self.max_units,
+                "quota_exceeded": False,
                 "updated_at": time.time(),
             }
             self._write_quota_file_locked(payload)
+            log.info("YouTube daily quota counter reset to 0.")
+
+    def record_quota_exceeded(self) -> None:
+        """Mark quota as exceeded (e.g. on 403 quotaExceeded)."""
+        with self._lock:
+            status = self._get_status_locked()
+            status["quota_exceeded"] = True
+            status["updated_at"] = time.time()
+            self._write_quota_file_locked(status)
+            log.warning("YouTube quota exceeded flag recorded.")
 
     def _read_quota_file_locked(self) -> dict[str, Any] | None:
         if not self.quota_path.exists():
@@ -210,6 +254,76 @@ class DailyQuotaTracker:
                 except OSError:
                     pass
             raise
+
+
+def optimize_short_for_youtube(
+    video_path: Path | str,
+    target_bitrate: str = "12M",
+    crf: int = 15,
+    audio_bitrate: str = "256k",
+) -> Path:
+    """Ensure video meets YouTube Shorts quality standard (10-12 Mbps, H.264 High Profile, bt709 color tags, 256k audio)."""
+    in_path = Path(video_path)
+    if not in_path.is_file():
+        return in_path
+
+    out_path = in_path.with_name(f"{in_path.stem}_yt.mp4")
+    if out_path.is_file() and out_path.stat().st_size > 0:
+        return out_path
+
+    # Check if already meets high bitrate/profile
+    try:
+        probe_cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=bit_rate,profile",
+            "-of", "json",
+            str(in_path),
+        ]
+        res = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=5)
+        if res.returncode == 0:
+            data = json.loads(res.stdout or "{}")
+            streams = data.get("streams", [])
+            if streams:
+                br = int(streams[0].get("bit_rate") or 0)
+                prof = str(streams[0].get("profile") or "").lower()
+                if br >= 10_000_000 and "high" in prof:
+                    return in_path
+    except Exception:
+        pass
+
+    try:
+        encode_cmd = [
+            "ffmpeg", "-y",
+            "-i", str(in_path),
+            "-c:v", "libx264",
+            "-preset", "slow",
+            "-crf", str(crf),
+            "-b:v", str(target_bitrate),
+            "-maxrate", "15M",
+            "-bufsize", "24M",
+            "-profile:v", "high",
+            "-level", "4.2",
+            "-pix_fmt", "yuv420p",
+            "-colorspace", "bt709",
+            "-color_primaries", "bt709",
+            "-color_trc", "bt709",
+            "-c:a", "aac",
+            "-b:a", str(audio_bitrate),
+            "-movflags", "+faststart",
+            str(out_path),
+        ]
+        log.info("Optimizing Short video for YouTube upload quality: %s -> %s", in_path.name, out_path.name)
+        run_res = subprocess.run(encode_cmd, capture_output=True, text=True, timeout=120)
+        if run_res.returncode == 0 and out_path.is_file() and out_path.stat().st_size > 0:
+            log.info("YouTube optimization complete: size=%.2fMB", out_path.stat().st_size / (1024 * 1024))
+            return out_path
+        else:
+            log.warning("YouTube video optimization failed; uploading original.")
+            return in_path
+    except Exception as exc:
+        log.warning("YouTube video optimization exception (%s); uploading original.", exc)
+        return in_path
 
 
 class YouTubeUploader:
@@ -262,6 +376,15 @@ class YouTubeUploader:
             if not allowed:
                 raise QuotaExceededError(reason)
 
+        # Pre-upload optimization for YouTube Shorts high-quality standards
+        opt_bitrate = os.environ.get("YOUTUBE_UPLOAD_BITRATE", "12M")
+        opt_crf = int(os.environ.get("YOUTUBE_UPLOAD_CRF", "15"))
+        opt_audio = os.environ.get("YOUTUBE_UPLOAD_AUDIO_BITRATE", "256k")
+        final_video_file = optimize_short_for_youtube(
+            video_file, target_bitrate=opt_bitrate, crf=opt_crf, audio_bitrate=opt_audio
+        )
+        file_size = final_video_file.stat().st_size
+
         # Resolve snippet metadata
         final_snippet = self._resolve_snippet(
             snippet=snippet,
@@ -283,7 +406,7 @@ class YouTubeUploader:
 
         # Step 2: Stream chunks with resumption and retries
         upload_result = self._stream_chunks(
-            upload_url, video_file, file_size, progress_callback=progress_callback
+            upload_url, final_video_file, file_size, progress_callback=progress_callback
         )
 
         # Step 3: Record successful upload against quota
@@ -396,6 +519,8 @@ class YouTubeUploader:
                     errors = err_info.get("errors", [])
                     reasons = [e.get("reason") for e in errors]
                     if "quotaExceeded" in reasons or "rateLimitExceeded" in reasons:
+                        if self.quota_tracker:
+                            self.quota_tracker.record_quota_exceeded()
                         raise QuotaExceededError(
                             f"YouTube API quota exceeded: {err_info.get('message')}"
                         )

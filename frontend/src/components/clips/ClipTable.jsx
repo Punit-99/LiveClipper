@@ -46,23 +46,24 @@ export function ClipTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {clips.map((clip) => {
+          {(clips || []).map((clip) => {
+            const clipId = clip.clip_id || clip.id || ""
             const isImported = Boolean(
-              clip.is_imported || clip.source_type === "imported" || clip.clip_id?.startsWith("imp_")
+              clip.is_imported || clip.source_type === "imported" || clipId?.startsWith("imp_")
             )
-            const score = Number(clip.score || clip.highlight_score || 0)
+            const score = Number(clip.score ?? clip.highlight_score ?? 0)
             const scoreVariant = score >= 80 ? "success" : score >= 60 ? "warning" : "destructive"
-            const isSelected = selectedIds.includes(clip.clip_id)
+            const isSelected = selectedIds.includes(clipId)
 
             return (
               <TableRow
-                key={clip.clip_id}
+                key={clipId}
                 className="border-[#1f293d] hover:bg-[#1a2233]/40"
               >
                 <TableCell>
                   <Checkbox
                     checked={isSelected}
-                    onCheckedChange={() => onToggleSelect(clip.clip_id)}
+                    onCheckedChange={() => onToggleSelect(clipId)}
                     className="border-slate-500"
                   />
                 </TableCell>
@@ -72,7 +73,7 @@ export function ClipTable({
                   </Badge>
                 </TableCell>
                 <TableCell className="font-medium text-white max-w-xs truncate cursor-pointer hover:text-blue-400" onClick={() => onPreview(clip)}>
-                  {clip.title || clip.suggested_title || clip.clip_id}
+                  {clip.title || clip.suggested_title || clipId}
                 </TableCell>
                 <TableCell className="text-slate-300">
                   {clip.channel || clip.streamer_name || "Unknown"}
@@ -86,7 +87,7 @@ export function ClipTable({
                   {Math.round(clip.duration || 0)}s
                 </TableCell>
                 <TableCell className="text-xs text-slate-400">
-                  {formatRecordedDate(clip.created_at || clip.timestamp)}
+                  {formatRecordedDate(clip.created_at || clip.timestamp || clip.recorded_at_iso)}
                 </TableCell>
                 <TableCell className="text-right">
                   <div className="flex items-center justify-end space-x-1.5">
@@ -102,7 +103,7 @@ export function ClipTable({
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => onProcess(clip.clip_id)}
+                      onClick={() => onProcess(clipId)}
                       className="h-7 w-7 text-blue-400 hover:text-blue-300 hover:bg-blue-500/10"
                       title="Process to Short"
                     >
@@ -111,7 +112,7 @@ export function ClipTable({
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => onDelete(clip.clip_id)}
+                      onClick={() => onDelete(clipId)}
                       className="h-7 w-7 text-red-400 hover:text-red-300 hover:bg-red-500/10"
                       title="Delete Clip"
                     >

@@ -2,6 +2,7 @@
 
 # Core LiveClipper Stream & Ingestion dependencies (Python 3.11 - 3.14)
 fastapi>=0.110.0,<1.0.0  # Web dashboard API server
+python-multipart>=0.0.18 # Form data and file upload support for FastAPI
 uvicorn>=0.28.0,<1.0.0   # ASGI web server
 requests>=2.32,<3        # HTTP client for YouTube REST API calls
 python-dotenv>=1.0,<2    # loads configuration from the local .env file

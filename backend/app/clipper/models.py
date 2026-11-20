@@ -90,6 +90,26 @@ class ImportClip:
 
 
 @dataclass
+class DownloadedVideo:
+    """A downloaded or uploaded video in the library."""
+
+    video_id: str
+    title: str
+    channel: str
+    duration: float
+    file_size_mb: float
+    source_type: str = "youtube"  # "youtube" | "uploaded"
+    thumbnail_url: str = ""
+    source_video_path: str = ""
+    created_at: float = field(default_factory=time.time)
+    status: str = "downloaded"  # "downloaded" | "analyzing" | "completed" | "failed"
+    clips_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class ImportJob:
     """State tracking for a video import & analysis job."""
 

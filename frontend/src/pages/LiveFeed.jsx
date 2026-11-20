@@ -125,7 +125,7 @@ export default function LiveFeedPage({ liveEvents = [], onClearEvents }) {
             </div>
           ) : (
             <div className="space-y-3">
-              {liveEvents.map((evt, idx) => {
+              {(liveEvents || []).map((evt, idx) => {
                 const meta = getEventMeta(evt.type)
                 const Icon = meta.icon
                 const timeStr = evt.timestamp

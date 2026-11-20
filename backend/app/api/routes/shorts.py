@@ -6,9 +6,11 @@ from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
+import subprocess
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.api.events import ws_manager
@@ -140,12 +142,14 @@ def list_shorts(
 
         output.append({
             "id": cid,
+            "clip_id": cid,
             "filename": short_video_path.name,
             "filepath": str(short_video_path),
             "channel": ch,
             "platform": rec.get("platform", "twitch"),
             "score": int(rec.get("highlight_score", 0)),
-            "title": rec.get("title") or "Stream Highlight",
+            "highlight_score": int(rec.get("highlight_score", 0)),
+            "title": selected_title or rec.get("title") or "Stream Highlight",
             "category": rec.get("category") or "highlight",
             "duration": float(rec.get("final_duration") or 0.0),
             "state": st,
@@ -196,6 +200,64 @@ def preview_short(clip_id: str, request: Request) -> Any:
         )
 
     return range_stream_response(short_path, request, media_type="video/mp4")
+
+
+@router.get("/shorts/{clip_id}/thumbnail")
+def get_short_thumbnail(clip_id: str) -> FileResponse:
+    """Serve or generate a JPEG thumbnail snapshot for a vertical Short."""
+    settings = load_settings()
+    pipeline = get_shorts_pipeline(settings=settings)
+    record = pipeline.manifest.get(clip_id)
+
+    short_path = None
+    if record and record.get("short_video_path"):
+        cand = Path(record["short_video_path"])
+        if cand.is_file():
+            short_path = cand
+
+    if not short_path:
+        for p in settings.shorts_output_dir.rglob(f"{clip_id}*_short.mp4"):
+            if p.is_file():
+                short_path = p
+                break
+
+    if not short_path or not short_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Vertical short with ID '{clip_id}' was not found.",
+        )
+
+    thumb_path = short_path.parent / f"{short_path.stem}_thumb.jpg"
+    if not thumb_path.is_file():
+        thumb_path = short_path.parent / f"{clip_id}_thumb.jpg"
+
+    if not thumb_path.is_file():
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y",
+                    "-ss", "00:00:01",
+                    "-i", str(short_path),
+                    "-vframes", "1",
+                    "-q:v", "2",
+                    str(thumb_path),
+                ],
+                check=True,
+                capture_output=True,
+                timeout=15,
+            )
+        except Exception as exc:
+            log.warning("Could not generate thumbnail for short %s: %s", clip_id, exc)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Thumbnail could not be generated for short '{clip_id}'.",
+            )
+
+    return FileResponse(
+        path=str(thumb_path),
+        media_type="image/jpeg",
+        filename=f"{clip_id}.jpg",
+    )
 
 
 @router.get("/shorts/queue")

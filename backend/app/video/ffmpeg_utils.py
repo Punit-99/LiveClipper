@@ -20,9 +20,21 @@ DELIVERY = "delivery"          # -preset fast -crf 22
 INTERMEDIATE = "intermediate"  # -preset fast -crf 18
 
 _X264_ARGS: dict[str, list[str]] = {
-    QUALITY: ["-c:v", "libx264", "-preset", "medium", "-crf", "18"],
-    QUALITY_FAST: ["-c:v", "libx264", "-preset", "fast", "-crf", "18"],
-    DELIVERY: ["-c:v", "libx264", "-preset", "fast", "-crf", "22"],
+    QUALITY: [
+        "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+        "-profile:v", "high", "-level", "4.2",
+        "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+    ],
+    QUALITY_FAST: [
+        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+        "-profile:v", "high", "-level", "4.2",
+        "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+    ],
+    DELIVERY: [
+        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        "-profile:v", "high", "-level", "4.2",
+        "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+    ],
     INTERMEDIATE: ["-c:v", "libx264", "-preset", "fast", "-crf", "18"],
 }
 
@@ -120,9 +132,10 @@ def video_encode_args(
     return base_x264
 
 
-def audio_encode_args(normalize: bool = False) -> list[str]:
+def audio_encode_args(normalize: bool = False, bitrate: str = "256k") -> list[str]:
     """Return standard audio encoding arguments."""
-    args = ["-c:a", "aac", "-b:a", "192k"]
+    ab = os.environ.get("YOUTUBE_UPLOAD_AUDIO_BITRATE", bitrate)
+    args = ["-c:a", "aac", "-b:a", ab]
     if normalize:
         args.extend(["-af", LOUDNORM_FILTER])
     return args

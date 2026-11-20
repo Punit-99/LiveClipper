@@ -351,12 +351,19 @@ def detect_and_rank_moments(
     target_clip_duration: float = 55.0,
     skip_intro_sec: float = 0.0,
     skip_outro_sec: float = 0.0,
+    start_time: float | None = None,
+    end_time: float | None = None,
     progress_cb: Callable[[str], None] | None = None,
 ) -> list[MomentCandidate]:
     """Combine transcript, audio, visual, and engagement signals into ranked moments."""
     duration = metadata.duration
     min_time = max(0.0, skip_intro_sec)
     max_time = max(min_time, duration - skip_outro_sec) if duration > 0 else 999999.0
+
+    if start_time is not None and float(start_time) > 0:
+        min_time = max(min_time, float(start_time))
+    if end_time is not None and float(end_time) > 0:
+        max_time = min(max_time, float(end_time))
 
     # 1. Transcript signal (50% weight)
     if progress_cb:

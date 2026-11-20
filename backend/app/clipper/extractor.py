@@ -122,14 +122,16 @@ def extract_all_clips(
     moments: list[MomentCandidate],
     metadata: VideoMetadata,
     output_dir: Path,
-    progress_cb: Callable[[int, int], None] | None = None,
+    progress_cb: Callable[[int, int, ImportClip | None], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> list[ImportClip]:
     """Extract all selected moments into MP4 clips with sidecars."""
     clips: list[ImportClip] = []
     total = len(moments)
     for idx, moment in enumerate(moments, 1):
-        if progress_cb:
-            progress_cb(idx, total)
+        if cancel_check and cancel_check():
+            log.info("Clip extraction halted early due to cancellation.")
+            break
         clip = extract_clip(
             source_video_path=source_video_path,
             moment=moment,
@@ -138,4 +140,10 @@ def extract_all_clips(
             clip_index=idx,
         )
         clips.append(clip)
+        if progress_cb:
+            try:
+                progress_cb(idx, total, clip)
+            except TypeError:
+                progress_cb(idx, total)
+    return clips
     return clips

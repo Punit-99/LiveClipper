@@ -12,10 +12,17 @@ import { Badge } from "@/components/ui/badge"
 export function ClipPlayer({ clip, open, onOpenChange }) {
   if (!clip) return null
 
-  const isImported = Boolean(clip.is_imported || clip.source_type === "imported" || clip.clip_id?.startsWith("imp_"))
-  const videoSrc = isImported
-    ? `/api/import/clips/${clip.clip_id}/preview`
-    : `/api/clips/${clip.clip_id}/preview`
+  const clipId = (clip.clip_id && clip.clip_id !== "undefined")
+    ? clip.clip_id
+    : (clip.id && clip.id !== "undefined")
+    ? clip.id
+    : ""
+  const isImported = Boolean(clip.is_imported || clip.source_type === "imported" || clipId?.startsWith("imp_"))
+  const videoSrc = clipId
+    ? isImported
+      ? `/api/import/clips/${clipId}/preview`
+      : `/api/clips/${clipId}/preview`
+    : null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -23,14 +30,14 @@ export function ClipPlayer({ clip, open, onOpenChange }) {
         <DialogHeader className="mb-2 text-left">
           <div className="flex items-center space-x-2">
             <DialogTitle className="text-base sm:text-lg font-bold text-white truncate">
-              {clip.title || clip.suggested_title || clip.clip_id}
+              {clip.title || clip.suggested_title || clipId}
             </DialogTitle>
             <Badge variant={isImported ? "purple" : "success"} className="text-[10px] shrink-0">
               {isImported ? "Imported" : "Live"}
             </Badge>
           </div>
           <DialogDescription className="text-xs text-slate-400">
-            {clip.channel || clip.streamer_name} · Score: {clip.score || clip.highlight_score || 0}/100 · {Math.round(clip.duration || 0)}s
+            {clip.channel || clip.streamer_name} · Score: {clip.score ?? clip.highlight_score ?? 0}/100 · {Math.round(clip.duration || 0)}s
           </DialogDescription>
         </DialogHeader>
 

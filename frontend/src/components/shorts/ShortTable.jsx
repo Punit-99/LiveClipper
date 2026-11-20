@@ -48,20 +48,22 @@ export function ShortTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {shorts.map((short) => {
+          {(shorts || []).map((short) => {
+            const clipId = short.clip_id || short.id || ""
+            const score = Number(short.score ?? short.highlight_score ?? 0)
             const isUploaded = short.state === "UPLOADED" || short.youtube_url
             const isFailed = short.state === "FAILED"
-            const isSelected = selectedIds.includes(short.clip_id)
+            const isSelected = selectedIds.includes(clipId)
 
             return (
               <TableRow
-                key={short.clip_id}
+                key={clipId}
                 className="border-[#1f293d] hover:bg-[#1a2233]/40"
               >
                 <TableCell>
                   <Checkbox
                     checked={isSelected}
-                    onCheckedChange={() => onToggleSelect(short.clip_id)}
+                    onCheckedChange={() => onToggleSelect(clipId)}
                     className="border-slate-500"
                   />
                 </TableCell>
@@ -84,19 +86,19 @@ export function ShortTable({
                   className="font-medium text-white max-w-xs truncate cursor-pointer hover:text-blue-400"
                   onClick={() => onPreview(short)}
                 >
-                  {short.title || short.clip_id}
+                  {short.title || short.selected_title || clipId}
                 </TableCell>
                 <TableCell className="text-slate-300">{short.channel}</TableCell>
                 <TableCell>
                   <Badge variant="success" className="text-[10px]">
-                    {short.highlight_score || 0}/100
+                    {score}/100
                   </Badge>
                 </TableCell>
                 <TableCell className="font-mono text-xs text-slate-300">
                   {Math.round(short.duration || 0)}s
                 </TableCell>
                 <TableCell className="text-xs text-slate-400">
-                  {formatRecordedDate(short.created_at || short.timestamp)}
+                  {formatRecordedDate(short.created_at || short.timestamp || short.processed_at_iso || short.recorded_at_iso)}
                 </TableCell>
                 <TableCell className="text-right">
                   <div className="flex items-center justify-end space-x-1.5">
@@ -115,7 +117,7 @@ export function ShortTable({
                         <Button
                           variant="ghost"
                           size="icon"
-                          onClick={() => onVerify(short.clip_id)}
+                          onClick={() => onVerify(clipId)}
                           className="h-7 w-7 text-emerald-400 hover:bg-emerald-500/10"
                           title="Verify on YouTube"
                         >
@@ -124,7 +126,7 @@ export function ShortTable({
                         <Button
                           variant="ghost"
                           size="icon"
-                          onClick={() => onReupload(short.clip_id)}
+                          onClick={() => onReupload(clipId)}
                           className="h-7 w-7 text-slate-400 hover:text-white"
                           title="Re-upload"
                         >
@@ -146,7 +148,7 @@ export function ShortTable({
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => onUpload(short.clip_id)}
+                        onClick={() => onUpload(clipId)}
                         className="h-7 w-7 text-red-400 hover:text-red-300 hover:bg-red-500/10"
                         title="Upload to YouTube"
                       >
@@ -157,7 +159,7 @@ export function ShortTable({
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => onDelete(short.clip_id)}
+                      onClick={() => onDelete(clipId)}
                       className="h-7 w-7 text-red-400 hover:text-red-300"
                       title="Delete Short"
                     >

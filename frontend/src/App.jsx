@@ -37,12 +37,14 @@ import {
   fetchChannelsLiveStatus,
 } from "@/api"
 import { toast } from "sonner"
+import { ChannelSelectionModal } from "@/components/modals/ChannelSelectionModal"
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("dashboard")
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [commandOpen, setCommandOpen] = useState(false)
   const [queueOpen, setQueueOpen] = useState(false)
+  const [showChannelModal, setShowChannelModal] = useState(false)
 
   // Data states
   const [status, setStatus] = useState(null)
@@ -170,6 +172,10 @@ export default function App() {
             setProcessingQueue(data)
           } else if (type === "upload_queue_updated") {
             setUploadQueue(data)
+          } else if (type === "import_progress") {
+            if (data.warning) {
+              toast.warning(data.warning)
+            }
           } else if (type === "import_complete") {
             toast.success(`Import complete! ${data.clips_count || 0} clips extracted.`, {
               action: {
@@ -177,6 +183,9 @@ export default function App() {
                 onClick: () => setActiveTab("import"),
               },
             })
+            fetchClips().then(setClips).catch(() => {})
+          } else if (type === "import_failed") {
+            toast.error(`Import failed: ${data.error || "Unknown error"}`)
           }
         } catch (e) {
           console.error("Failed to parse websocket message", e)
@@ -188,7 +197,8 @@ export default function App() {
         reconnectTimeout = setTimeout(connectWs, 3000)
       }
 
-      ws.onerror = () => {
+      ws.onerror = (err) => {
+        console.error("WebSocket error:", err)
         ws.close()
       }
     }
@@ -201,33 +211,63 @@ export default function App() {
   }, [loadAllData])
 
   // Handlers
+  const handleRefreshQuota = useCallback(async () => {
+    try {
+      const q = await fetchQuota()
+      if (q) setQuota(q)
+      toast.success("YouTube quota updated.")
+    } catch {
+      toast.error("Failed to refresh quota.")
+    }
+  }, [])
+
   const handleToggleMonitoring = async () => {
     if (status?.is_monitoring) {
       try {
         await stopMonitoring()
-        toast.info("Stopping stream monitoring...")
+        toast.success("Stream monitoring stopped.")
         await loadAllData()
       } catch (err) {
-        toast.error(err.message || "Failed to stop monitoring.")
+        console.error("Failed to stop monitoring:", err)
+        toast.error(`Failed to stop monitoring: ${err.message || "Unknown error"}`)
       }
     } else {
-      setActiveTab("dashboard")
+      setShowChannelModal(true)
     }
   }
 
-  const handleStartMonitoring = async (payload) => {
+  const handleStartMonitoring = async (payload = {}) => {
     setIsStarting(true)
     try {
-      await startMonitoring(payload)
+      const res = await startMonitoring(payload)
+      if (res.status === "awaiting_fallback_approval") {
+        toast.info("Target channels offline. Alternative live streams found.")
+      } else if (res.status === "waiting_for_targets") {
+        toast.info("Target channels offline. Polling targets in background.")
+      } else {
+        toast.success("Live stream monitoring started!")
+      }
+      setShowChannelModal(false)
       await loadAllData()
+      return res
+    } catch (err) {
+      console.error("Failed to start monitoring:", err)
+      toast.error(`Failed to start monitoring: ${err.message || "Unknown error"}`)
+      throw err
     } finally {
       setIsStarting(false)
     }
   }
 
   const handleStopMonitoring = async () => {
-    await stopMonitoring()
-    await loadAllData()
+    try {
+      await stopMonitoring()
+      toast.success("Stream monitoring stopped.")
+      await loadAllData()
+    } catch (err) {
+      console.error("Failed to stop monitoring:", err)
+      toast.error(`Failed to stop monitoring: ${err.message || "Unknown error"}`)
+    }
   }
 
   const handleApproveFallback = async (ch) => {
@@ -251,33 +291,67 @@ export default function App() {
   }
 
   const handleProcessSingle = async (clipId) => {
-    await processSingleShort(clipId)
-    await loadAllData()
+    try {
+      await processSingleShort(clipId)
+      await loadAllData()
+    } catch (err) {
+      console.error("Failed to process single short:", err)
+      throw err
+    }
   }
 
   const handleUploadSingle = async (clipId) => {
-    await uploadSingleShort(clipId)
-    await loadAllData()
+    try {
+      await uploadSingleShort(clipId)
+      await loadAllData()
+    } catch (err) {
+      console.error("Failed to upload single short:", err)
+      throw err
+    }
   }
 
   const handleDeleteClip = async (clipId) => {
-    await deleteSingleClip(clipId)
-    setClips((prev) => prev.filter((c) => c.clip_id !== clipId))
+    try {
+      await deleteSingleClip(clipId)
+      setClips((prev) => prev.filter((c) => (c.clip_id || c.id) !== clipId))
+      await loadAllData()
+    } catch (err) {
+      console.error("Failed to delete clip:", err)
+      throw err
+    }
   }
 
   const handleDeleteAllClips = async () => {
-    await deleteAllClips()
-    setClips([])
+    try {
+      await deleteAllClips()
+      setClips([])
+      await loadAllData()
+    } catch (err) {
+      console.error("Failed to delete all clips:", err)
+      throw err
+    }
   }
 
   const handleDeleteShort = async (clipId) => {
-    await deleteSingleShort(clipId)
-    setShorts((prev) => prev.filter((s) => s.clip_id !== clipId))
+    try {
+      await deleteSingleShort(clipId)
+      setShorts((prev) => prev.filter((s) => (s.clip_id || s.id) !== clipId))
+      await loadAllData()
+    } catch (err) {
+      console.error("Failed to delete short:", err)
+      throw err
+    }
   }
 
   const handleDeleteAllShorts = async () => {
-    await deleteAllShorts()
-    setShorts([])
+    try {
+      await deleteAllShorts()
+      setShorts([])
+      await loadAllData()
+    } catch (err) {
+      console.error("Failed to delete all shorts:", err)
+      throw err
+    }
   }
 
   const handleSaveSettings = async (newSettings) => {
@@ -286,6 +360,9 @@ export default function App() {
       const updated = await updateSettings(newSettings)
       setSettings(updated)
       await loadAllData()
+    } catch (err) {
+      console.error("Failed to save settings:", err)
+      throw err
     } finally {
       setIsSaving(false)
     }
@@ -316,6 +393,7 @@ export default function App() {
           onOpenCommand={() => setCommandOpen(true)}
           queueStatus={{ processing: processingQueue, upload: uploadQueue }}
           onOpenQueue={() => setQueueOpen(true)}
+          onRefreshQuota={handleRefreshQuota}
         />
 
         <PageContainer>
@@ -333,6 +411,7 @@ export default function App() {
               onWaitTarget={handleWaitTarget}
               onNavigate={setActiveTab}
               onRefresh={loadAllData}
+              onOpenStartModal={() => setShowChannelModal(true)}
             />
           )}
 
@@ -397,6 +476,16 @@ export default function App() {
         open={queueOpen}
         onOpenChange={setQueueOpen}
         queueStatus={{ processing: processingQueue, upload: uploadQueue }}
+      />
+
+      {/* Channel Selection Modal for Starting Monitoring */}
+      <ChannelSelectionModal
+        open={showChannelModal}
+        onOpenChange={setShowChannelModal}
+        onStartMonitoring={handleStartMonitoring}
+        onWaitTarget={handleWaitTarget}
+        maxConcurrent={settings?.multi_stream_enabled ? (Number(settings?.max_concurrent_streams) || 2) : 1}
+        onNavigateToSettings={() => setActiveTab("settings")}
       />
 
       {/* Sonner Toast Notifications */}

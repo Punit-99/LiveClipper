@@ -37,6 +37,13 @@ export function ShortCard({
   uploadState,
   verifyState,
 }) {
+  const clipId = (shortItem.clip_id && shortItem.clip_id !== "undefined")
+    ? shortItem.clip_id
+    : (shortItem.id && shortItem.id !== "undefined")
+    ? shortItem.id
+    : ""
+  const score = Number(shortItem.score ?? shortItem.highlight_score ?? 0)
+
   const isUploaded = shortItem.state === "UPLOADED" || shortItem.youtube_url
   const isFailed = shortItem.state === "FAILED"
   const isProcessing = shortItem.state === "PROCESSING" || shortItem.state === "DISCOVERED"
@@ -48,8 +55,8 @@ export function ShortCard({
   const isVerifying = verifyState?.loading
   const verificationResult = verifyState?.result
 
-  const thumbnailSrc = `/api/shorts/${shortItem.clip_id}/thumbnail`
-  const dateStr = formatRecordedDate(shortItem.created_at || shortItem.timestamp)
+  const thumbnailSrc = clipId ? `/api/shorts/${clipId}/thumbnail` : null
+  const dateStr = formatRecordedDate(shortItem.created_at || shortItem.timestamp || shortItem.processed_at_iso || shortItem.recorded_at_iso)
 
   return (
     <Card className="overflow-hidden border-[#1f293d] bg-[#121826]/90 hover:border-slate-600 transition-all group flex flex-col justify-between">
@@ -59,14 +66,20 @@ export function ShortCard({
           className="relative aspect-[9/14] sm:aspect-[9/13] bg-black/80 cursor-pointer overflow-hidden flex items-center justify-center"
           onClick={() => onPreview(shortItem)}
         >
-          <img
-            src={thumbnailSrc}
-            alt={shortItem.title}
-            className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-            onError={(e) => {
-              e.currentTarget.style.display = "none"
-            }}
-          />
+          {thumbnailSrc ? (
+            <img
+              src={thumbnailSrc}
+              alt={shortItem.title}
+              className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+              onError={(e) => {
+                e.currentTarget.style.display = "none"
+              }}
+            />
+          ) : (
+            <div className="flex items-center justify-center h-full text-slate-500">
+              <Film className="w-8 h-8 opacity-40" />
+            </div>
+          )}
           <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-black/40" />
 
           {/* Top badges: Selection Checkbox & Upload Status */}
@@ -76,7 +89,7 @@ export function ShortCard({
           >
             <Checkbox
               checked={isSelected}
-              onCheckedChange={() => onToggleSelect(shortItem.clip_id)}
+              onCheckedChange={() => onToggleSelect(clipId)}
               className="bg-black/60 border-slate-500"
             />
             {isUploaded ? (
@@ -114,7 +127,7 @@ export function ShortCard({
           {/* Bottom duration & score tag */}
           <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between text-[11px] font-mono">
             <span className="px-1.5 py-0.5 rounded bg-black/80 text-emerald-400 font-bold">
-              {shortItem.highlight_score || 0}/100
+              {score}/100
             </span>
             <span className="px-1.5 py-0.5 rounded bg-black/80 text-slate-200">
               {Math.round(shortItem.duration || 0)}s
@@ -129,7 +142,7 @@ export function ShortCard({
               className="text-sm font-semibold text-white line-clamp-1 hover:text-blue-400 cursor-pointer"
               onClick={() => onPreview(shortItem)}
             >
-              {shortItem.title || shortItem.clip_id}
+              {shortItem.title || shortItem.selected_title || clipId}
             </h4>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -149,13 +162,13 @@ export function ShortCard({
                   </DropdownMenuItem>
                 )}
                 {isUploaded && (
-                  <DropdownMenuItem onClick={() => onVerify(shortItem.clip_id)}>
+                  <DropdownMenuItem onClick={() => onVerify(clipId)}>
                     <ShieldCheck className="w-3.5 h-3.5 mr-2 text-emerald-400" />
                     <span>Verify on YouTube</span>
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => onDelete(shortItem.clip_id)} className="text-red-400">
+                <DropdownMenuItem onClick={() => onDelete(clipId)} className="text-red-400">
                   <Trash2 className="w-3.5 h-3.5 mr-2" />
                   <span>Delete Short</span>
                 </DropdownMenuItem>
@@ -213,7 +226,7 @@ export function ShortCard({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => onVerify(shortItem.clip_id)}
+              onClick={() => onVerify(clipId)}
               disabled={isVerifying}
               className="flex-1 text-xs border-[#1f293d] hover:bg-[#1f293d]"
             >
@@ -227,7 +240,7 @@ export function ShortCard({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => onReupload(shortItem.clip_id)}
+              onClick={() => onReupload(clipId)}
               className="flex-1 text-xs border-[#1f293d] hover:bg-[#1f293d]"
             >
               <RotateCw className="w-3 h-3 mr-1" />
@@ -237,7 +250,7 @@ export function ShortCard({
         ) : (
           <Button
             size="sm"
-            onClick={() => onUpload(shortItem.clip_id)}
+            onClick={() => onUpload(clipId)}
             disabled={isUploadingActive || isUploadQueued}
             className="w-full text-xs bg-red-600 hover:bg-red-500 text-white font-medium flex items-center justify-center space-x-1.5 shadow"
           >
