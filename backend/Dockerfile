@@ -1,70 +1,118 @@
-# LiveClipper Backend Dockerfile (Optimized)
-# Multi-stage build: ~5GB → ~1.5-2GB estimated
+# syntax=docker/dockerfile:1.7
+# LiveClipper Backend Dockerfile — fully optimized
+# Multi-stage: build deps isolated, BuildKit cache mounts, non-root runtime, pruned site-packages.
 
-# ============================================
-# Stage 1: BUILD — compile Python C-extensions
-# ============================================
-FROM python:3.11-slim AS builder
+ARG PYTHON_VERSION=3.11
+
+# =============================================================
+# Stage 1: BUILDER — compile wheels into an isolated prefix
+# =============================================================
+FROM python:${PYTHON_VERSION}-slim AS builder
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_COMPILE=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /build
 
-# Only build-essential needed here (never ships to final image)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
+# Build-only system deps (never ship to final image)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir --upgrade pip
+# Install everything into /install so the runtime image can copy a single tree.
+# CPU-only PyTorch first — prevents ~2 GB CUDA wheels from being pulled.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --prefix=/install \
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch torchvision
 
-# Install CPU-only PyTorch first (prevents 2GB+ CUDA wheel download)
-RUN pip install --no-cache-dir \
-    --index-url https://download.pytorch.org/whl/cpu \
-    torch torchvision
-
-# Install remaining dependencies
+# App dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --prefix=/install -r requirements.txt
+
+# Prune: strip bytecode caches, tests, docs, type stubs we don't need at runtime.
+# Saves hundreds of MB on torch / mediapipe / faster-whisper.
+RUN set -eux; \
+    find /install -depth \
+        \( -type d -a \( -name __pycache__ -o -name tests -o -name test \
+                       -o -name testing -o -name examples -o -name docs \) \) \
+        -exec rm -rf '{}' + ; \
+    find /install -type f \( -name '*.pyc' -o -name '*.pyo' \
+                           -o -name '*.pyi' -o -name '*.md' \
+                           -o -name '*.txt' -o -name '*.rst' \) -delete ; \
+    # Strip debug symbols from shared libraries
+    find /install -type f -name '*.so*' -exec strip --strip-unneeded {} + 2>/dev/null || true
 
 
-# ============================================
+# =============================================================
 # Stage 2: RUNTIME — lean production image
-# ============================================
-FROM python:3.11-slim
-
-WORKDIR /app
+# =============================================================
+FROM python:${PYTHON_VERSION}-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
-    FFMPEG_THREADS=2
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    FFMPEG_THREADS=2 \
+    PATH=/usr/local/bin:$PATH
 
-# Runtime-only system deps (no build-essential, no curl)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    fontconfig \
-    fonts-liberation \
-    fonts-noto-core \
-    fonts-noto-color-emoji \
-    libgl1 \
-    libglib2.0-0 \
+# Runtime-only system deps. Noto core is heavy but required for subtitle rendering
+# across scripts; emoji font is required for emoji in hook banners.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        fontconfig \
+        fonts-liberation \
+        fonts-noto-core \
+        fonts-noto-color-emoji \
+        libgl1 \
+        libglib2.0-0 \
+        tini \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy all installed Python packages from builder
-COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+# Pull the pre-built Python stack from the builder stage.
+COPY --from=builder /install /usr/local
 
-# Copy application source
-COPY . .
+# Create non-root user and all writable data dirs up front, owned by it.
+ARG APP_UID=10001
+ARG APP_GID=10001
+RUN groupadd --system --gid ${APP_GID} app \
+ && useradd  --system --uid ${APP_UID} --gid app --home /app --shell /sbin/nologin app \
+ && mkdir -p /app /app/clips /app/shorts /app/imports /app/logs /app/data /app/.buffer \
+ && chown -R app:app /app
 
-# Register fonts + create data dirs in a single layer
-RUN mkdir -p /usr/local/share/fonts/liveclipper /app/clips /app/shorts /app/logs /app/data /app/.buffer && \
-    cp /app/app/video/fonts/*.ttf /usr/local/share/fonts/liveclipper/ 2>/dev/null || true && \
-    cp /app/app/video/fonts/openshorts-fontmap.conf /etc/fonts/conf.d/60-liveclipper.conf 2>/dev/null || true && \
-    fc-cache -f
+WORKDIR /app
+
+# ---- Fonts: copy and register BEFORE the main source copy so edits to app code
+#      don't bust the font-cache layer. ----
+COPY --chown=app:app app/video/fonts/ /tmp/fonts/
+RUN mkdir -p /usr/local/share/fonts/liveclipper \
+ && cp /tmp/fonts/*.ttf /usr/local/share/fonts/liveclipper/ \
+ && if [ -f /tmp/fonts/openshorts-fontmap.conf ]; then \
+        cp /tmp/fonts/openshorts-fontmap.conf /etc/fonts/conf.d/60-liveclipper.conf ; \
+    fi \
+ && fc-cache -f \
+ && rm -rf /tmp/fonts
+
+# Application source — last so unrelated edits don't invalidate earlier layers.
+COPY --chown=app:app . .
+
+USER app
 
 EXPOSE 8000
 
-# Healthcheck using Python (no curl needed = smaller image)
-HEALTHCHECK --interval=15s --timeout=5s --start-period=15s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
+# Python-based healthcheck with an explicit socket timeout so a hung backend
+# can't outlive the --timeout boundary.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request,sys;\
+import socket; socket.setdefaulttimeout(3);\
+urllib.request.urlopen('http://127.0.0.1:8000/api/health').read()" || exit 1
 
+# tini reaps zombies (ffmpeg/whisper subprocesses) and forwards signals cleanly.
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python", "server.py", "--host", "0.0.0.0", "--port", "8000"]
