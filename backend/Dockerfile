@@ -9,9 +9,18 @@ ARG PYTHON_VERSION=3.11
 # =============================================================
 FROM python:${PYTHON_VERSION}-slim AS builder
 
+# Re-declare ARG so ${PYTHON_VERSION} is usable INSIDE this stage.
+ARG PYTHON_VERSION
+
+# CRITICAL: PYTHONPATH must point at the prefix so the SECOND pip install
+# sees CPU-torch as already-satisfied and does not re-resolve it against
+# PyPI (which would pull the ~2 GB GPU wheel + full CUDA toolchain).
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_COMPILE=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PIP_DEFAULT_TIMEOUT=180 \
+    PIP_RETRIES=5 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/install/lib/python3.11/site-packages
 
 WORKDIR /build
 
@@ -25,14 +34,24 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # Install everything into /install so the runtime image can copy a single tree.
 # CPU-only PyTorch first — prevents ~2 GB CUDA wheels from being pulled.
 RUN --mount=type=cache,target=/root/.cache/pip \
+    mkdir -p "${PYTHONPATH}" && \
     pip install --prefix=/install \
         --index-url https://download.pytorch.org/whl/cpu \
-        torch torchvision
+        torch torchvision && \
+    echo ">>> VERIFY: CPU torch installed to ${PYTHONPATH}" && \
+    python -c "import sys; sys.path.insert(0, '${PYTHONPATH}'); \
+import torch; print('torch', torch.__version__, 'cuda?', torch.cuda.is_available())"
 
-# App dependencies
+# App dependencies. PYTHONPATH (set above) makes pip see the CPU torch from
+# the previous layer, so `torch>=2.0.0,<3.0.0` is already satisfied here.
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --prefix=/install -r requirements.txt
+    echo ">>> pip sees:" && pip list --path "${PYTHONPATH}" | grep -iE 'torch|vision' && \
+    pip install --prefix=/install -r requirements.txt && \
+    echo ">>> VERIFY: no CUDA wheels got pulled" && \
+    if ls "${PYTHONPATH}" | grep -qiE 'nvidia_|cuda_toolkit|triton'; then \
+        echo "FAIL: CUDA deps leaked into /install:" && ls "${PYTHONPATH}" | grep -iE 'nvidia_|cuda_|triton' && exit 1; \
+    fi
 
 # Prune: strip bytecode caches, tests, docs, type stubs we don't need at runtime.
 # Saves hundreds of MB on torch / mediapipe / faster-whisper.

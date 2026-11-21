@@ -51,16 +51,15 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 # Rewrite the main config to drop the privileged master, bind PID to a writable
 # path, and point temp/log dirs at locations our user can write to.
 RUN set -eux; \
-    sed -i \
-        -e '/^user /d' \
-        -e 's|pid\s\+/var/run/nginx.pid;|pid /tmp/nginx.pid;|' \
+    sed -i -E \
+        -e '/^user[[:space:]]/d' \
+        -e 's|^pid[[:space:]]+[^;]+;|pid /tmp/nginx.pid;|' \
         /etc/nginx/nginx.conf; \
-    mkdir -p /var/cache/nginx /var/run /tmp/nginx; \
+    grep -E '^pid ' /etc/nginx/nginx.conf; \
+    mkdir -p /var/cache/nginx /tmp/nginx; \
     chown -R nginx:nginx \
         /var/cache/nginx /var/log/nginx /etc/nginx/conf.d \
-        /usr/share/nginx/html /tmp/nginx; \
-    # Ensure listening on 3000 doesn't need CAP_NET_BIND_SERVICE (>1024, so fine).
-    true
+        /usr/share/nginx/html /tmp/nginx
 
 USER nginx
 

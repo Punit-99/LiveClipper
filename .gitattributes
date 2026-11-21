@@ -1,0 +1,53 @@
+# Default: auto-detect text vs binary, normalize to LF on commit.
+* text=auto eol=lf
+
+# ---- LF-only (executed inside Linux containers or by POSIX tooling) ----
+*.sh              text eol=lf
+*.py              text eol=lf
+*.js              text eol=lf
+*.jsx             text eol=lf
+*.ts              text eol=lf
+*.tsx             text eol=lf
+*.css             text eol=lf
+*.html            text eol=lf
+*.json            text eol=lf
+*.yml             text eol=lf
+*.yaml            text eol=lf
+*.md              text eol=lf
+*.conf            text eol=lf
+*.toml            text eol=lf
+*.ini             text eol=lf
+*.env             text eol=lf
+*.env.*           text eol=lf
+Dockerfile        text eol=lf
+Dockerfile.*      text eol=lf
+*.dockerfile      text eol=lf
+.dockerignore     text eol=lf
+.gitignore        text eol=lf
+.gitattributes    text eol=lf
+
+# ---- CRLF only (native Windows tooling) ----
+*.ps1             text eol=crlf
+*.psm1            text eol=crlf
+*.bat             text eol=crlf
+*.cmd             text eol=crlf
+
+# ---- Binary (never touch, never diff) ----
+*.ttf             binary
+*.otf             binary
+*.woff            binary
+*.woff2           binary
+*.png             binary
+*.jpg             binary
+*.jpeg            binary
+*.gif             binary
+*.ico             binary
+*.pdf             binary
+*.mp4             binary
+*.mov             binary
+*.webm            binary
+*.mp3             binary
+*.wav             binary
+*.zip             binary
+*.gz             binary
+*.tar            binary
