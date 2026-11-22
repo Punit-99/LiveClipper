@@ -17,6 +17,7 @@ from app.api.events import ws_manager
 from app.clipper.analyzer import detect_and_rank_moments
 from app.clipper.downloader import (
     download_video,
+    extract_timestamp_from_url,
     extract_youtube_id,
     fetch_video_info,
     parse_timestamp_seconds,
@@ -311,12 +312,17 @@ class ClipperService:
         self,
         url: str,
         quality: int = 1080,
+        start_time: str | float | int | None = None,
+        end_time: str | float | int | None = None,
         progress_cb: Callable[[float, str], None] | None = None,
     ) -> DownloadedVideo:
         """Download YouTube video and save to the library without starting analysis."""
         vid = extract_youtube_id(url)
         if not vid:
             raise ValueError(f"Invalid YouTube URL: {url}")
+
+        if start_time is None:
+            start_time = extract_timestamp_from_url(url)
 
         vdir = self.imports_dir / vid
         vdir.mkdir(parents=True, exist_ok=True)
@@ -326,18 +332,27 @@ class ClipperService:
             url=url,
             output_dir=vdir,
             max_quality=quality,
+            start_time=start_time,
+            end_time=end_time,
             progress_cb=progress_cb,
         )
+
+        actual_dur = probe_video_duration(src_mp4)
+        if actual_dur > 0:
+            metadata.duration = actual_dur
 
         # Generate thumbnail
         thumb_file = vdir / "thumbnail.jpg"
         if not thumb_file.is_file():
-            generate_video_thumbnail(src_mp4, thumb_file, offset_sec=2.0)
+            offset = min(2.0, max(0.5, metadata.duration / 4.0)) if metadata.duration > 0 else 1.0
+            generate_video_thumbnail(src_mp4, thumb_file, offset_sec=offset)
 
         meta_dict = metadata.to_dict()
         meta_dict["created_at"] = time.time()
         meta_dict["source_type"] = "youtube"
         meta_dict["thumbnail_url"] = f"/api/import/library/{vid}/thumbnail"
+        if start_time or end_time:
+            meta_dict["download_range"] = {"start_time": start_time, "end_time": end_time}
         with open(vdir / "metadata.json", "w", encoding="utf-8") as mf:
             json.dump(meta_dict, mf, indent=2)
 
@@ -612,10 +627,14 @@ class ClipperService:
                     _update("downloading", mapped, f"Stage 1/7: {msg}", stage_num=1)
 
                 quality = int(job.options.get("quality", getattr(settings, "import_download_quality", 1080)))
+                start_t = job.options.get("start_time")
+                end_t = job.options.get("end_time")
                 source_mp4, sub_path = download_video(
                     url=job.url,
                     output_dir=video_work_dir,
                     max_quality=quality,
+                    start_time=start_t,
+                    end_time=end_t,
                     progress_cb=_dl_cb,
                 )
             else:

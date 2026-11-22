@@ -251,7 +251,7 @@ def get_clip_thumbnail(clip_id: str) -> FileResponse:
     return FileResponse(
         path=str(thumb_path),
         media_type="image/jpeg",
-        filename=f"{clip_id}.jpg",
+        content_disposition_type="inline",
     )
 
 

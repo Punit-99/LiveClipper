@@ -54,6 +54,8 @@ class LibraryAnalyzeRequest(BaseModel):
 class DownloadRequest(BaseModel):
     url: str
     quality: int = Field(default=1080)
+    start_time: str | None = None
+    end_time: str | None = None
 
 
 @router.get("/info")
@@ -125,13 +127,19 @@ def download_to_library(payload: DownloadRequest) -> dict[str, Any]:
         )
     service = get_clipper_service()
     try:
-        item = service.download_video_to_library(url=payload.url, quality=payload.quality)
+        item = service.download_video_to_library(
+            url=payload.url,
+            quality=payload.quality,
+            start_time=payload.start_time,
+            end_time=payload.end_time,
+        )
         return item.to_dict()
     except Exception as exc:
         log.exception("Failed downloading video to library: %s", exc)
+        clean_detail = str(exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Could not download video to library: {exc}",
+            detail=f"Could not download video to library: {clean_detail}",
         )
 
 
@@ -183,7 +191,7 @@ def get_library_thumbnail(video_id: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Thumbnail for video '{video_id}' not found.",
         )
-    return FileResponse(path=thumb_path, media_type="image/jpeg", filename=f"{clean_id}.jpg")
+    return FileResponse(path=thumb_path, media_type="image/jpeg", content_disposition_type="inline")
 
 
 @router.api_route("/library/{video_id}/preview", methods=["GET", "HEAD"])
@@ -193,12 +201,19 @@ def preview_library_video(video_id: str, request: Request):
     service = get_clipper_service()
     item = service.get_library_item(clean_id)
     source_path = None
-    if item and Path(item.source_path).is_file():
-        source_path = Path(item.source_path)
-    else:
-        cand = service.imports_dir / clean_id / "source.mp4"
-        if cand.is_file():
-            source_path = cand
+    if item:
+        cand_str = getattr(item, "source_video_path", None) or getattr(item, "source_path", None)
+        if cand_str and Path(cand_str).is_file():
+            source_path = Path(cand_str)
+
+    if not source_path:
+        # Fallback to direct search in imports directory
+        vdir = service.imports_dir / clean_id
+        if vdir.is_dir():
+            for p in vdir.glob("source.*"):
+                if p.is_file() and p.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov", ".avi") and p.stat().st_size > 0:
+                    source_path = p
+                    break
 
     if not source_path or not source_path.is_file():
         raise HTTPException(
@@ -360,7 +375,7 @@ def get_imported_clip_thumbnail(clip_id: str):
     return FileResponse(
         path=str(thumb_path),
         media_type="image/jpeg",
-        filename=f"{clean_id}.jpg",
+        content_disposition_type="inline",
     )
 
 

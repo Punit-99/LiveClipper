@@ -105,8 +105,15 @@ class DownloadedVideo:
     status: str = "downloaded"  # "downloaded" | "analyzing" | "completed" | "failed"
     clips_count: int = 0
 
+    @property
+    def source_path(self) -> str:
+        """Compatibility property for code accessing source_path."""
+        return self.source_video_path
+
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d["source_path"] = self.source_video_path
+        return d
 
 
 @dataclass

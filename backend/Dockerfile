@@ -91,6 +91,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         fonts-noto-color-emoji \
         libgl1 \
         libglib2.0-0 \
+        nodejs \
         tini \
     && rm -rf /var/lib/apt/lists/*
 

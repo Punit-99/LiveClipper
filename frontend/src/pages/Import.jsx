@@ -127,6 +127,7 @@ export default function ImportPage({ onNavigate }) {
       await loadData()
     } catch (err) {
       toast.error(err.message || "Failed to download video.")
+      throw err
     }
   }
 

@@ -193,6 +193,13 @@ def preview_short(clip_id: str, request: Request) -> Any:
         cand = Path(record["short_video_path"])
         if cand.is_file():
             short_path = cand
+        else:
+            raw_ch = record.get("channel", "streamer")
+            cand_alt = settings.shorts_output_dir / raw_ch / cand.name
+            if cand_alt.is_file():
+                short_path = cand_alt
+            elif (settings.shorts_output_dir / cand.name).is_file():
+                short_path = settings.shorts_output_dir / cand.name
 
     if not short_path:
         # Search by glob in shorts_dir
@@ -223,6 +230,13 @@ def get_short_thumbnail(clip_id: str) -> FileResponse:
         cand = Path(record["short_video_path"])
         if cand.is_file():
             short_path = cand
+        else:
+            raw_ch = record.get("channel", "streamer")
+            cand_alt = settings.shorts_output_dir / raw_ch / cand.name
+            if cand_alt.is_file():
+                short_path = cand_alt
+            elif (settings.shorts_output_dir / cand.name).is_file():
+                short_path = settings.shorts_output_dir / cand.name
 
     if not short_path:
         for p in settings.shorts_output_dir.rglob(f"*{clean_id}*.mp4"):
@@ -267,7 +281,7 @@ def get_short_thumbnail(clip_id: str) -> FileResponse:
     return FileResponse(
         path=str(thumb_path),
         media_type="image/jpeg",
-        filename=f"{clip_id}.jpg",
+        content_disposition_type="inline",
     )
 
 

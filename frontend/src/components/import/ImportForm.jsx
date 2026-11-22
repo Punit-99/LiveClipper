@@ -65,6 +65,18 @@ export function ImportForm({
       return
     }
 
+    // Auto-detect timestamp if present in URL
+    try {
+      const parsedUrl = new URL(trimmed.startsWith("http") ? trimmed : `https://${trimmed}`)
+      const tParam = parsedUrl.searchParams.get("t") || parsedUrl.searchParams.get("start")
+      if (tParam) {
+        setTimingMode("range")
+        setStartTime(tParam)
+      }
+    } catch {
+      // ignore URL parse errors
+    }
+
     const timer = setTimeout(async () => {
       setMetaLoading(true)
       try {
@@ -87,11 +99,17 @@ export function ImportForm({
       return
     }
     setIsDownloading(true)
+    const payload = {
+      url: url.trim(),
+      quality: 1080,
+      start_time: timingMode === "range" ? startTime.trim() : null,
+      end_time: timingMode === "range" ? endTime.trim() : null,
+    }
     try {
       if (onDownloadOnly) {
-        await onDownloadOnly({ url: url.trim(), quality: 1080 })
+        await onDownloadOnly(payload)
       } else {
-        await downloadImportVideo({ url: url.trim(), quality: 1080 })
+        await downloadImportVideo(payload)
         toast.success("Video downloaded and added to Library!")
       }
       setUrl("")

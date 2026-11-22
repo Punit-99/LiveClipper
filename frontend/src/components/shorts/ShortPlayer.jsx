@@ -1,4 +1,4 @@
-import React, { useState } from "react"
+import React, { useState, useEffect, useRef } from "react"
 import {
   Dialog,
   DialogContent,
@@ -12,6 +12,7 @@ import { Copy, Check, ExternalLink, Sparkles, Film, Tag } from "lucide-react"
 import { toast } from "sonner"
 
 export function ShortPlayer({ shortItem, open, onOpenChange }) {
+  const videoRef = useRef(null)
   const [copiedTitle, setCopiedTitle] = useState("")
   const [hasError, setHasError] = useState(false)
 
@@ -24,9 +25,17 @@ export function ShortPlayer({ shortItem, open, onOpenChange }) {
   const videoSrc = clipId ? `/api/shorts/${clipId}/preview` : null
   const thumbnailSrc = clipId ? `/api/shorts/${clipId}/thumbnail` : null
 
-  React.useEffect(() => {
+  useEffect(() => {
     setHasError(false)
   }, [videoSrc])
+
+  useEffect(() => {
+    if (open && videoRef.current && videoSrc && !hasError) {
+      videoRef.current.play().catch(() => {
+        // Autoplay policy prevented playback; native controls remain functional
+      })
+    }
+  }, [open, videoSrc, hasError])
 
   if (!shortItem) return null
 
@@ -76,13 +85,14 @@ export function ShortPlayer({ shortItem, open, onOpenChange }) {
         <div className="relative mx-auto w-full max-w-[340px] aspect-[9/16] bg-black rounded-xl overflow-hidden border border-slate-800 shadow-2xl flex items-center justify-center">
           {videoSrc && !hasError ? (
             <video
+              ref={videoRef}
               key={videoSrc}
               src={videoSrc}
               poster={thumbnailSrc || undefined}
               controls
               autoPlay
               playsInline
-              preload="auto"
+              preload="metadata"
               onError={() => setHasError(true)}
               className="w-full h-full object-cover rounded-xl"
             />

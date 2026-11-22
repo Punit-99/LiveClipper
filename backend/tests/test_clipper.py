@@ -24,6 +24,7 @@ from app.clipper.audio_energy import (
 )
 from app.clipper.downloader import (
     VideoMetadata,
+    classify_youtube_error,
     download_video,
     extract_youtube_id,
     fetch_video_info,
@@ -31,7 +32,7 @@ from app.clipper.downloader import (
     parse_timestamp_seconds,
 )
 from app.clipper.extractor import extract_clip
-from app.clipper.models import ImportClip, ImportJob, TranscriptSegment
+from app.clipper.models import DownloadedVideo, ImportClip, ImportJob, TranscriptSegment
 from app.clipper.service import ClipperService, get_clipper_service
 
 
@@ -46,6 +47,9 @@ class TestClipperDownloader(unittest.TestCase):
             ("https://www.youtube.com/embed/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
             ("https://www.youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
             ("http://youtube.com/v/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+            ("https://music.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+            ("https://gaming.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+            ("https://www.youtube.com/watch?feature=shared&v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
             ("dQw4w9WgXcQ", "dQw4w9WgXcQ"),
         ]
         for url, expected_id in urls:
@@ -120,6 +124,81 @@ class TestClipperDownloader(unittest.TestCase):
             self.assertTrue(source_mp4.is_file())
             self.assertIsNone(sub_path)  # Subtitles gracefully skipped
             self.assertGreaterEqual(call_count[0], 2)
+
+    def test_classify_youtube_error(self):
+        self.assertIn("private", classify_youtube_error(RuntimeError("Private video. Sign in")).lower())
+        self.assertIn("age-restricted", classify_youtube_error(RuntimeError("Sign in to confirm your age")).lower())
+        self.assertIn("unavailable", classify_youtube_error(RuntimeError("This video is unavailable")).lower())
+        self.assertIn("region", classify_youtube_error(RuntimeError("not made this video available in your country")).lower())
+        self.assertIn("429", classify_youtube_error(RuntimeError("HTTP Error 429: Too Many Requests")).lower())
+        self.assertIn("bot", classify_youtube_error(RuntimeError("Sign in to confirm you're not a bot")).lower())
+
+    @mock.patch("yt_dlp.YoutubeDL")
+    def test_download_video_with_time_range(self, mock_ydl_cls):
+        """Verify that start_time and end_time configure download_ranges in yt-dlp."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_dir = Path(tmp_dir)
+            captured_opts = {}
+
+            def _init_mock(opts):
+                captured_opts.update(opts)
+                m = mock.MagicMock()
+                def _dl(urls):
+                    (out_dir / "source.mp4").write_bytes(b"clipped_mp4_bytes")
+                m.download.side_effect = _dl
+                m.__enter__.return_value = m
+                return m
+
+            mock_ydl_cls.side_effect = _init_mock
+
+            source_mp4, _ = download_video(
+                url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                output_dir=out_dir,
+                start_time="1:00",
+                end_time="2:30",
+            )
+            self.assertTrue(source_mp4.is_file())
+            self.assertIn("download_ranges", captured_opts)
+            self.assertTrue(captured_opts.get("force_keyframes_at_cuts"))
+
+    @mock.patch("subprocess.run")
+    @mock.patch("yt_dlp.YoutubeDL")
+    def test_download_video_remux_webm_to_mp4(self, mock_ydl_cls, mock_subproc):
+        """Verify non-mp4 downloaded files (e.g. source.webm) are remuxed to source.mp4."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            out_dir = Path(tmp_dir)
+
+            def _mock_download(urls):
+                (out_dir / "source.webm").write_bytes(b"webm_bytes")
+
+            mock_ydl = mock.MagicMock()
+            mock_ydl.download.side_effect = _mock_download
+            mock_ydl_cls.return_value.__enter__.return_value = mock_ydl
+
+            def _fake_ffmpeg(cmd, **kwargs):
+                (out_dir / "source.mp4").write_bytes(b"converted_mp4_bytes")
+                return mock.MagicMock(returncode=0)
+
+            mock_subproc.side_effect = _fake_ffmpeg
+
+            source_mp4, _ = download_video(
+                url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                output_dir=out_dir,
+            )
+            self.assertEqual(source_mp4.name, "source.mp4")
+            self.assertTrue(source_mp4.is_file())
+
+    def test_downloaded_video_source_path_property(self):
+        dv = DownloadedVideo(
+            video_id="test1234",
+            title="Test",
+            channel="TestCh",
+            duration=60.0,
+            file_size_mb=10.5,
+            source_video_path="/path/to/source.mp4",
+        )
+        self.assertEqual(dv.source_path, "/path/to/source.mp4")
+        self.assertEqual(dv.to_dict()["source_path"], "/path/to/source.mp4")
 
 
 class TestClipperAudioEnergy(unittest.TestCase):

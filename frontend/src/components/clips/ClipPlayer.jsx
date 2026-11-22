@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useRef } from "react"
 import {
   Dialog,
   DialogContent,
@@ -11,6 +11,9 @@ import { Badge } from "@/components/ui/badge"
 import { Film } from "lucide-react"
 
 export function ClipPlayer({ clip, open, onOpenChange }) {
+  const videoRef = useRef(null)
+  const triedFallbackRef = useRef(false)
+
   const clipId = (clip?.clip_id && clip.clip_id !== "undefined")
     ? clip.clip_id
     : (clip?.id && clip.id !== "undefined")
@@ -35,17 +38,27 @@ export function ClipPlayer({ clip, open, onOpenChange }) {
   useEffect(() => {
     setVideoSrc(initialSrc)
     setHasError(false)
+    triedFallbackRef.current = false
   }, [initialSrc])
+
+  useEffect(() => {
+    if (open && videoRef.current && videoSrc && !hasError) {
+      videoRef.current.play().catch(() => {
+        // Autoplay policy prevented playback; controls remain available for user interaction
+      })
+    }
+  }, [open, videoSrc, hasError])
 
   if (!clip) return null
 
   const handleVideoError = () => {
-    if (clipId && videoSrc?.startsWith("/api/import/clips/")) {
-      // Fallback to /api/clips/:id/preview
-      setVideoSrc(`/api/clips/${clipId}/preview`)
-    } else if (clipId && videoSrc?.startsWith("/api/clips/")) {
-      // Fallback to /api/import/clips/:id/preview
-      setVideoSrc(`/api/import/clips/${clipId}/preview`)
+    if (clipId && !triedFallbackRef.current) {
+      triedFallbackRef.current = true
+      if (videoSrc?.startsWith("/api/import/clips/")) {
+        setVideoSrc(`/api/clips/${clipId}/preview`)
+      } else {
+        setVideoSrc(`/api/import/clips/${clipId}/preview`)
+      }
     } else {
       setHasError(true)
     }
@@ -73,13 +86,14 @@ export function ClipPlayer({ clip, open, onOpenChange }) {
           <AspectRatio ratio={16 / 9} className="flex items-center justify-center">
             {videoSrc && !hasError ? (
               <video
+                ref={videoRef}
                 key={videoSrc}
                 src={videoSrc}
                 poster={thumbnailSrc || undefined}
                 controls
                 autoPlay
                 playsInline
-                preload="auto"
+                preload="metadata"
                 onError={handleVideoError}
                 className="w-full h-full object-contain"
               />

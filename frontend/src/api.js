@@ -426,7 +426,17 @@ export async function fetchImportJob(jobId) {
 export async function fetchImportedClips() {
   const res = await fetch(`${API_BASE}/import/clips`);
   if (!res.ok) throw new Error(`Failed to fetch imported clips: ${res.statusText}`);
-  return res.json();
+  const data = await res.json();
+  const list = Array.isArray(data) ? data : (data?.clips || []);
+  return list.map(item => ({
+    ...item,
+    clip_id: item.clip_id || item.id,
+    id: item.id || item.clip_id,
+    highlight_score: item.highlight_score ?? item.score ?? 0,
+    score: item.score ?? item.highlight_score ?? 0,
+    is_imported: true,
+    source_type: "imported",
+  }));
 }
 
 export async function deleteImportedClip(clipId) {
